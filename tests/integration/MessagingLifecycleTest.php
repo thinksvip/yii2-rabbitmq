@@ -88,4 +88,56 @@ class MessagingLifecycleTest extends TestCase
             $connection->close();
         }
     }
+
+    public function testExternalResourcesAreBoundWithoutRedeclaration()
+    {
+        $external = $this->prefix . '-external';
+        $manual = $this->prefix . '-manual';
+        $config = $this->configure([
+            'connections' => [['name' => 'default', 'url' => $this->url], ['name' => 'probe', 'url' => $this->url]],
+            'exchanges' => [
+                ['name' => $external, 'type' => 'fanout', 'declare' => false],
+                ['name' => $manual, 'type' => 'direct', 'declare' => false],
+            ],
+            'queues' => [['name' => $external, 'declare' => false], ['name' => $manual, 'declare' => false]],
+            'bindings' => [['exchange' => $external, 'queue' => $external, 'routing_keys' => ['job']]],
+            'producers' => [['name' => 'sender']],
+        ]);
+        $connection = $config->getConnection();
+        $routing = $config->getRouting($connection);
+        $other = $config->getConnection('probe');
+        try {
+            $probe = $connection->channel();
+            // Existing attributes deliberately differ from configuration; redeclaration would fail with 406.
+            $probe->exchange_declare($external, 'direct', false, false, true);
+            $probe->queue_declare($external, false, false, true, false);
+            $producer = $config->getProducer('sender');
+            $channel = $producer->getChannel();
+            $channel->confirm_select();
+            $producer->publish('external', $external, 'job');
+            $channel->wait_for_pending_acks(3);
+            $this->assertSame('external', $probe->basic_get($external, true)->getBody());
+            $this->assertFalse($routing->isQueueExists($manual));
+            $this->assertFalse($routing->isExchangeExists($manual));
+            $routing->declareQueue($manual);
+            $routing->declareExchange($manual);
+            $this->assertTrue($routing->isQueueExists($manual));
+            $this->assertTrue($routing->isExchangeExists($manual));
+            try {
+                $config->getRouting($other)->isQueueExists($external);
+                $this->fail('An exclusive queue locked by another connection must report RESOURCE_LOCKED.');
+            } catch (AMQPProtocolChannelException $e) {
+                $this->assertSame(405, $e->getCode());
+            }
+        } finally {
+            if ($routing->isQueueExists($manual)) {
+                $routing->deleteQueue($manual);
+            }
+            if ($routing->isExchangeExists($manual)) {
+                $routing->deleteExchange($manual);
+            }
+            $other->close();
+            $connection->close();
+        }
+    }
 }

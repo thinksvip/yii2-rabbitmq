@@ -104,6 +104,7 @@ class ConfigurationTest extends TestCase
         yield 'TLS over socket' => [['connections' => [$connection + [
             'ssl_context' => [], 'type' => \PhpAmqpLib\Connection\AMQPSocketConnection::class,
         ]]], 'stream connection'];
+        yield 'unknown resource connection' => [['queues' => [['name' => 'jobs', 'connection' => 'missing']]], 'Unknown connection'];
         $resources = ['exchanges' => [['name' => 'events', 'type' => 'topic']], 'queues' => [['name' => 'jobs']]];
         yield 'unknown exchange type' => [['exchanges' => [['name' => 'events', 'type' => 'bad']]], 'Unknown exchange type'];
         foreach ([

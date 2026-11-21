@@ -65,11 +65,30 @@ class DependencyInjection implements BootstrapInterface
      */
     protected function registerRouting(Configuration $config)
     {
-        \Yii::$container->setSingleton(Configuration::ROUTING_SERVICE_NAME, function ($container, $params) use ($config) {
-            $routing = new Routing($params['conn']);
-            \Yii::$container->invoke([$routing, 'setQueues'], [$config->queues]);
-            \Yii::$container->invoke([$routing, 'setExchanges'], [$config->exchanges]);
-            \Yii::$container->invoke([$routing, 'setBindings'], [$config->bindings]);
+        $routers = new \SplObjectStorage();
+        \Yii::$container->set(Configuration::ROUTING_SERVICE_NAME, function ($container, $params) use ($config, $routers) {
+            $connection = $params['conn'];
+            if (isset($routers[$connection])) {
+                return $routers[$connection];
+            }
+
+            $name = null;
+            foreach ($config->connections as $options) {
+                $id = sprintf(Configuration::CONNECTION_SERVICE_NAME, $options['name']);
+                // Looking up a router must not open any other configured connection.
+                if ($container->hasSingleton($id, true) && $container->get($id) === $connection) {
+                    $name = $options['name'];
+                    break;
+                }
+            }
+            $topology = $config->getRoutingConfiguration($name);
+            $routing = new Routing($connection);
+            $routing->setQueues($topology['queues']);
+            $routing->setExchanges($topology['exchanges']);
+            $routing->setBindings($topology['bindings']);
+            if ($name !== null) {
+                $routers[$connection] = $routing;
+            }
 
             return $routing;
         });

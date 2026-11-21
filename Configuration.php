@@ -52,6 +52,7 @@ class Configuration extends Component
         'exchanges' => [
             [
                 'name' => null,
+                'connection' => null,
                 'type' => null,
                 'passive' => false,
                 'durable' => true,
@@ -66,6 +67,7 @@ class Configuration extends Component
         'queues' => [
             [
                 'name' => '',
+                'connection' => null,
                 'passive' => false,
                 'durable' => true,
                 'exclusive' => false,
@@ -79,6 +81,7 @@ class Configuration extends Component
         'bindings' => [
             [
                 'exchange' => null,
+                'connection' => null,
                 'queue' => null,
                 'to_exchange' => null,
                 'routing_keys' => [],
@@ -203,6 +206,36 @@ class Configuration extends Component
     }
 
     /**
+     * Unscoped entries are shared. A binding also requires both ends in the selected vhost.
+     * A null connection name selects shared entries for an externally supplied connection.
+     */
+    public function getRoutingConfiguration(?string $connectionName): array
+    {
+        $matchesConnection = static function ($entry) use ($connectionName) {
+            return !isset($entry['connection']) || $entry['connection'] === $connectionName;
+        };
+        $queues = array_filter($this->queues, $matchesConnection);
+        $exchanges = array_filter($this->exchanges, $matchesConnection);
+        $bindings = [];
+        foreach (array_filter($this->bindings, $matchesConnection) as $index => $binding) {
+            if (!$this->isNameExist($exchanges, $binding['exchange'])) {
+                continue;
+            }
+            if (isset($binding['queue']) && !$this->isNameExist($queues, $binding['queue'])) {
+                continue;
+            }
+            // The destination exchange can also be managed outside this application.
+            if (isset($binding['to_exchange']) && $this->isNameExist($this->exchanges, $binding['to_exchange'])
+                && !$this->isNameExist($exchanges, $binding['to_exchange'])) {
+                continue;
+            }
+            $bindings[$index] = $binding;
+        }
+
+        return compact('queues', 'exchanges', 'bindings');
+    }
+
+    /**
      * Config validation
      * @throws InvalidConfigException
      */
@@ -211,7 +244,8 @@ class Configuration extends Component
         $this->validateTopLevel();
         $this->validateMultidimensional();
         $this->validateRequired();
-        $this->validateDuplicateNames(['connections', 'exchanges', 'queues', 'producers', 'consumers']);
+        $this->validateDuplicateNames(['connections', 'producers', 'consumers']);
+        $this->validateRouting();
     }
 
     /**
@@ -369,9 +403,10 @@ class Configuration extends Component
             if (isset($consumer['proceed_on_exception']) && !is_bool($consumer['proceed_on_exception'])) {
                 throw new InvalidConfigException('Consumer option `proceed_on_exception` should be of type boolean.');
             }
+            $connectionName = $consumer['connection'] ?? self::DEFAULT_CONNECTION_NAME;
             foreach ($consumer['callbacks'] as $queue => $callback) {
-                if (!$this->isNameExist($this->queues, $queue)) {
-                    throw new InvalidConfigException("Queue `{$queue}` from {$consumer['name']} is not defined in queues.");
+                if (!$this->isNameExist($this->queues, (string)$queue, $connectionName)) {
+                    throw new InvalidConfigException("Queue `{$queue}` from {$consumer['name']} is not defined on connection `{$connectionName}`.");
                 }
                 if (!is_string($callback)) {
                     throw new InvalidConfigException('Consumer `callback` parameter value should be a class name or service name in DI container.');
@@ -398,24 +433,44 @@ class Configuration extends Component
         }
     }
 
-    /**
-     * Check entrees for duplicate names
-     * @param array $keys
-     * @throws InvalidConfigException
-     */
+    private function validateRouting()
+    {
+        foreach (['exchanges', 'queues', 'bindings'] as $key) {
+            foreach ($this->$key as $entry) {
+                if (isset($entry['connection']) && (!is_string($entry['connection'])
+                    || !$this->isNameExist($this->connections, $entry['connection']))) {
+                    throw new InvalidConfigException("Unknown connection in {$key}.");
+                }
+            }
+        }
+        $applicableBindings = [];
+        foreach ($this->connections as $connection) {
+            $routing = $this->getRoutingConfiguration($connection['name']);
+            $this->checkUniqueNames($routing['exchanges'], 'exchanges');
+            $this->checkUniqueNames($routing['queues'], 'queues');
+            $applicableBindings += $routing['bindings'];
+        }
+        if (count($applicableBindings) !== count($this->bindings)) {
+            throw new InvalidConfigException('Binding endpoints must be available on the same connection.');
+        }
+    }
+
     protected function validateDuplicateNames(array $keys)
     {
         foreach ($keys as $key) {
-            $names = [];
-            foreach ($this->$key as $item) {
-                if (!isset($item['name'])) {
-                    $item['name'] = '';
-                }
-                if (isset($names[$item['name']])) {
-                    throw new InvalidConfigException("Duplicate name `{$item['name']}` in {$key}");
-                }
-                $names[$item['name']] = true;
+            $this->checkUniqueNames($this->$key, $key);
+        }
+    }
+
+    private function checkUniqueNames(array $items, string $key)
+    {
+        $names = [];
+        foreach ($items as $item) {
+            $name = $item['name'] ?? '';
+            if (isset($names[$name])) {
+                throw new InvalidConfigException("Duplicate name `{$name}` in {$key}");
             }
+            $names[$name] = true;
         }
     }
 
@@ -467,23 +522,18 @@ class Configuration extends Component
 
     /**
      * Check if an entry with specific name exists in array
-     * @param array $multidimentional
+     * @param array $items
      * @param string $name
+     * @param string|null $connectionName
      * @return bool
      */
-    private function isNameExist(array $multidimentional, string $name)
+    private function isNameExist(array $items, string $name, ?string $connectionName = null)
     {
-        if($name == '') {
-            foreach ($multidimentional as $item) {
-                if (!isset($item['name'])) {
-                    return true;
-                }
+        foreach ($items as $item) {
+            if (($item['name'] ?? '') === $name && ($connectionName === null
+                || !isset($item['connection']) || $item['connection'] === $connectionName)) {
+                return true;
             }
-            return false;
-        }
-        $key = array_search($name, array_column($multidimentional, 'name'), true);
-        if (is_int($key)) {
-            return true;
         }
 
         return false;

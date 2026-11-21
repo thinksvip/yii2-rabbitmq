@@ -192,6 +192,30 @@ By default extension configured in auto-declare mode, which means that on every 
 
 Set `declare` to `false` on a queue or exchange managed outside the application. Automatic setup and `rabbitmq/declare-all` skip creating that resource. Configured bindings still use it. The explicit `declare-queue` and `declare-exchange` commands can create it.
 
+#### Multiple vhosts
+
+Give each connection a name and use that name in the `connection` option on producers and consumers. To restrict a queue, exchange or binding to one vhost, set its `connection` to the same name.
+
+```php
+'connections' => [
+    ['name' => 'a', 'host' => 'localhost', 'vhost' => '/a'],
+    ['name' => 'b', 'host' => 'localhost', 'vhost' => '/b'],
+],
+'exchanges' => [
+    ['name' => 'events', 'type' => 'direct'],
+],
+'queues' => [
+    ['name' => 'orders', 'connection' => 'a'],
+    ['name' => 'billing', 'connection' => 'b'],
+],
+'bindings' => [
+    ['exchange' => 'events', 'queue' => 'orders', 'routing_keys' => ['order']],
+    ['exchange' => 'events', 'queue' => 'billing', 'routing_keys' => ['invoice']],
+],
+```
+
+Running `yii rabbitmq/declare-all a` creates the `events` exchange, the `orders` queue and its binding in `/a`. Running it for `b` creates `events` and `billing` in `/b`. Queues and exchanges with no `connection` apply to every selected connection. Bindings apply where their endpoints are available. Distinct connections may configure the same queue or exchange name with different options.
+
 Usage
 -------------
 As the consumer worker will read messages from the queue, execute a callback method and pass a message to it. 
@@ -269,6 +293,7 @@ $rabbitmq_defaults = [
         'exchanges' => [
             [
                 'name' => null,
+                'connection' => null,
                 'type' => null,
                 'passive' => false,
                 'durable' => true,
@@ -282,6 +307,7 @@ $rabbitmq_defaults = [
         'queues' => [
             [
                 'name' => '',
+                'connection' => null,
                 'passive' => false,
                 'durable' => true,
                 'exclusive' => false,
@@ -294,6 +320,7 @@ $rabbitmq_defaults = [
         'bindings' => [
             [
                 'exchange' => null,
+                'connection' => null,
                 'queue' => null,
                 'to_exchange' => null,
                 'routing_keys' => [],
