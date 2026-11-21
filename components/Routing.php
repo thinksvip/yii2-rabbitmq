@@ -32,6 +32,24 @@ class Routing
         $this->conn = $conn;
     }
 
+    public function __destruct()
+    {
+        try {
+            $this->close();
+        } catch (\Throwable $e) {
+            // Explicit close() reports errors; cleanup must not mask another exception.
+        }
+    }
+
+    /** Release this router's channel without closing the shared connection. */
+    public function close(): void
+    {
+        if ($this->hasCurrentChannel()) {
+            $this->ch->close();
+        }
+        $this->reset();
+    }
+
     /**
      * @param array $queues
      */

@@ -257,6 +257,8 @@ If the consumer loses its broker connection, it attempts to reconnect once and r
 
 When `consume()` exits, it releases the consumer's delivery channel. RabbitMQ can then redeliver any prefetched messages left unprocessed, including on the next `consume()` call. Other channels on the shared connection stay available.
 
+When repeatedly creating temporary routers for an external connection, call `$routing->close()` after use. It releases only that router's channel, keeping the shared connection and other channels available. Destruction also attempts cleanup, and a closed router can be reused. `reset()` only discards session state after a disconnect; use `close()` to release a live channel.
+
 #### Publish
  Here is an example how you can publish a message:
 ```php

@@ -12,6 +12,37 @@ use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 
 class RoutingTest extends TestCase
 {
+    public function testClosingAnUnusedRouterDoesNotOpenOrCloseTheConnection()
+    {
+        $connection = $this->createMock(AMQPLazyConnection::class);
+        $connection->expects($this->never())->method('channel');
+        $connection->expects($this->never())->method('close');
+        $routing = new Routing($connection);
+        $routing->close();
+        $routing->close();
+        unset($routing);
+    }
+
+    public function testClosingAStaleRouterDoesNotCloseAReplacementChannel()
+    {
+        $connection = $this->createMock(AMQPLazyConnection::class);
+        $connection->method('isConnected')->willReturn(true);
+        $connection->expects($this->never())->method('close');
+        $oldChannel = $this->createMock(AMQPChannel::class);
+        $oldChannel->method('getChannelId')->willReturn(1);
+        $oldChannel->expects($this->never())->method('close');
+        $replacement = $this->createMock(AMQPChannel::class);
+        $replacement->expects($this->never())->method('close');
+        $connection->channels[1] = $replacement;
+        $routing = new Routing($connection);
+        $this->setInaccessibleProperty($routing, 'ch', $oldChannel);
+
+        $routing->close();
+
+        $this->assertNull($this->getInaccessibleProperty($routing, 'ch'));
+        $this->assertSame($replacement, $connection->channels[1]);
+    }
+
     public function testExclusiveRecoveryWaitsOnlyForAPreviousOwnerAndStopsRetrying()
     {
         $connection = $this->createMock(AMQPLazyConnection::class);
