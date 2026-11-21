@@ -26,7 +26,7 @@ class DependencyInjectionTest extends TestCase
                     'connections' => [
                         [
                             'name' => $name,
-                            'url' => 'amqp://user:pass@host:5432/vhost?query',
+                            'url' => 'amqp://user:pass@host:5432/vhost?connection_timeout=3',
                         ],
                     ],
                     'exchanges' => [
@@ -100,6 +100,7 @@ class DependencyInjectionTest extends TestCase
 
     public function testBootstrapWrongUrl()
     {
+        $this->expectException(InvalidConfigException::class);
         $this->loadExtension([
             'components' => [
                 'rabbitmq' => [
@@ -112,8 +113,6 @@ class DependencyInjectionTest extends TestCase
                 ],
             ],
         ]);
-        $this->expectException(\InvalidArgumentException::class);
-        \Yii::$app->rabbitmq->getConnection();
     }
 
     public function testBootstrapProducer()

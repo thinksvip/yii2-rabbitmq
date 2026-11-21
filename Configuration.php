@@ -2,13 +2,14 @@
 
 namespace mikemadisonweb\rabbitmq;
 
+use mikemadisonweb\rabbitmq\components\AbstractConnectionFactory;
 use mikemadisonweb\rabbitmq\components\Consumer;
 use mikemadisonweb\rabbitmq\components\Producer;
 use mikemadisonweb\rabbitmq\components\Routing;
 use mikemadisonweb\rabbitmq\exceptions\InvalidConfigException;
 use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Connection\AMQPLazyConnection;
-use PhpAmqpLib\Connection\AMQPSSLConnection;
+use PhpAmqpLib\Connection\AMQPStreamConnection;
 use Yii;
 use yii\base\Component;
 use yii\di\NotInstantiableException;
@@ -236,6 +237,9 @@ class Configuration extends Component
                 if (!is_int($key)) {
                     throw new InvalidConfigException("Invalid key: `{$key}`. There should be a list of {$configName}s in the array.");
                 }
+                if (!is_array($value)) {
+                    throw new InvalidConfigException("Every {$configName} entry should be of type array.");
+                }
             }
         }
     }
@@ -263,7 +267,7 @@ class Configuration extends Component
      */
     protected function validateRequired()
     {
-        foreach ($this->connections as $connection) {
+        foreach ($this->connections as $index => $connection) {
             $this->validateArrayFields($connection, self::DEFAULTS['connections'][0]);
             if (!isset($connection['url']) && !isset($connection['host'])) {
                 throw new InvalidConfigException('Either `url` or `host` options required for configuring connection.');
@@ -277,12 +281,16 @@ class Configuration extends Component
             if (isset($connection['type']) && !is_subclass_of($connection['type'], AbstractConnection::class)) {
                 throw new InvalidConfigException('Connection type should be a subclass of PhpAmqpLib\Connection\AbstractConnection.');
             }
-            if (!empty($connection['ssl_context']) && empty($connection['type'])) {
-                throw new InvalidConfigException('If you are using a ssl connection, the connection type must be AMQPSSLConnection::class');
+            if (isset($connection['ssl_context'])) {
+                if (!is_array($connection['ssl_context'])) {
+                    throw new InvalidConfigException('Connection option `ssl_context` must be an array of TLS options.');
+                }
+                $type = $connection['type'] ?? self::DEFAULTS['connections'][0]['type'];
+                if (!is_a($type, AMQPStreamConnection::class, true)) {
+                    throw new InvalidConfigException('TLS options require a stream connection.');
+                }
             }
-            if (!empty($connection['ssl_context']) && $connection['type'] !== AMQPSSLConnection::class) {
-                throw new InvalidConfigException('If you are using a ssl connection, the connection type must be AMQPSSLConnection::class');
-            }
+            $this->connections[$index] = AbstractConnectionFactory::normalizeParameters($connection);
         }
 
         foreach ($this->exchanges as $exchange) {
@@ -352,6 +360,9 @@ class Configuration extends Component
             if (!isset($consumer['callbacks']) || empty($consumer['callbacks'])) {
                 throw new InvalidConfigException("No callbacks specified for consumer `{$consumer['name']}`.");
             }
+            if (!is_array($consumer['callbacks'])) {
+                throw new InvalidConfigException('Consumer option `callbacks` should be of type array.');
+            }
             if (isset($consumer['qos']) && !is_array($consumer['qos'])) {
                 throw new InvalidConfigException('Consumer option `qos` should be of type array.');
             }
@@ -414,15 +425,16 @@ class Configuration extends Component
      */
     protected function normalizeConnections()
     {
-        if (empty($this->connections)) {
+        if (!is_array($this->connections) || !$this->connections) {
             throw new InvalidConfigException('Option `connections` should have at least one entry.');
         }
         if (ArrayHelper::isAssociative($this->connections)) {
-            $this->connections[0] = $this->connections;
+            $this->connections = [$this->connections];
         }
         if (count($this->connections) === 1) {
-            if (!isset($this->connections[0]['name'])) {
-                $this->connections[0]['name'] = self::DEFAULT_CONNECTION_NAME;
+            $key = array_key_first($this->connections);
+            if (is_array($this->connections[$key]) && !isset($this->connections[$key]['name'])) {
+                $this->connections[$key]['name'] = self::DEFAULT_CONNECTION_NAME;
             }
         }
     }

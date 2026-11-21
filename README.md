@@ -237,6 +237,11 @@ By default connection to broker only get established upon publishing a message, 
 
 Options
 -------------
+For TLS, set the connection's `port` to the broker's TLS listener (usually 5671) and set `ssl_context` to an array of PHP TLS options such as `['cafile' => '/path/to/ca.pem']`. The default connection opens lazily. Existing configurations that specify `AMQPSSLConnection::class` open TLS immediately and return an `AMQPStreamConnection` instance.
+The legacy `AMQPLazySSLConnection::class` setting returns an `AMQPLazyConnection` and opens TLS on first use.
+
+Connection URL queries accept only `host`, `port`, `user`, `password`, `vhost`, `connection_timeout`, `read_write_timeout`, `keepalive`, `heartbeat`, and `channel_rpc_timeout`. Query values override the corresponding URL and array fields before validation. `keepalive` accepts `true/false/1/0`; ports must be 1–65535, heartbeats 0–65535, and timeouts finite non-negative seconds. The RPC timeout must not exceed the read/write timeout. Unknown, repeated and nested query parameters are rejected during configuration loading. Remove previously ignored placeholders such as `?query` or `?lazy=1`; the connection `type` determines lazy opening.
+
 All configuration options:
 ```php
 $rabbitmq_defaults = [

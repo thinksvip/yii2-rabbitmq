@@ -21,7 +21,7 @@ class RoutingTest extends TestCase
                     'connections' => [
                         [
                             'name' => $name,
-                            'url' => 'amqp://user:pass@host:5432/vhost?query',
+                            'url' => 'amqp://user:pass@host:5432/vhost?connection_timeout=3',
                         ],
                     ],
                     'exchanges' => [
@@ -92,7 +92,7 @@ class RoutingTest extends TestCase
                     'class' => Configuration::class,
                     'connections' => [
                         [
-                            'url' => 'amqp://user:pass@host:5432/vhost?query',
+                            'url' => 'amqp://user:pass@host:5432/vhost?connection_timeout=3',
                         ],
                     ],
                 ],
@@ -126,7 +126,7 @@ class RoutingTest extends TestCase
                     'class' => Configuration::class,
                     'connections' => [
                         [
-                            'url' => 'amqp://user:pass@host:5432/vhost?query',
+                            'url' => 'amqp://user:pass@host:5432/vhost?connection_timeout=3',
                         ],
                     ],
                 ],
@@ -164,7 +164,7 @@ class RoutingTest extends TestCase
                     'class' => Configuration::class,
                     'connections' => [
                         [
-                            'url' => 'amqp://user:pass@host:5432/vhost?query',
+                            'url' => 'amqp://user:pass@host:5432/vhost?connection_timeout=3',
                         ],
                     ],
                     'exchanges' => [
