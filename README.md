@@ -2,27 +2,20 @@ RabbitMQ Extension for Yii2
 ==================
 Wrapper based on php-amqplib library to incorporate messaging in your Yii2 application via RabbitMQ. Inspired by RabbitMqBundle for Symfony framework.
 
+`xincheng/yii2-rabbitmq` is an independently maintained fork of [mikemadisonweb/yii2-rabbitmq](https://github.com/mikemadisonweb/yii2-rabbitmq).
+
 This branch supports PHP 7.4 and PHP 8.x, including PHP 8.5. It requires Yii 2.0.55 or later in the 2.x series and php-amqplib 3.7.4 or later in the 3.x series. For legacy PHP applications >=5.4 please use the [previous version of this extension](https://github.com/mikemadisonweb/yii2-rabbitmq/blob/master/README_v1.md).
 
-[![Latest Stable Version](https://poser.pugx.org/mikemadisonweb/yii2-rabbitmq/v/stable)](https://packagist.org/packages/mikemadisonweb/yii2-rabbitmq)
-[![License](https://poser.pugx.org/mikemadisonweb/yii2-rabbitmq/license)](https://packagist.org/packages/mikemadisonweb/yii2-rabbitmq)
-[![Build Status](https://travis-ci.org/mikemadisonweb/yii2-rabbitmq.svg?branch=master)](https://travis-ci.org/mikemadisonweb/yii2-rabbitmq)
-[![Coverage Status](https://coveralls.io/repos/github/mikemadisonweb/yii2-rabbitmq/badge.svg?branch=master)](https://coveralls.io/github/mikemadisonweb/yii2-rabbitmq?branch=master)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fmikemadisonweb%2Fyii2-rabbitmq.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fmikemadisonweb%2Fyii2-rabbitmq?ref=badge_shield)
 
 Installation
 ------------
-The preferred way to install this extension is through [composer](http://getcomposer.org/download/).
+Install the extension with Composer.
 
-Either run
+```sh
+composer require xincheng/yii2-rabbitmq
 ```
-php composer.phar require mikemadisonweb/yii2-rabbitmq
-```
-or add
-```json
-"mikemadisonweb/yii2-rabbitmq": "^2.2.0"
-```
-to the require section of your `composer.json` file.
+
+If you are switching from the upstream package, remove `mikemadisonweb/yii2-rabbitmq` from your application's Composer requirements before installing the fork. Both packages use the same PHP namespace (`mikemadisonweb\rabbitmq`), so existing imports and Yii class references continue to work.
 
 Configuration
 -------------
@@ -384,4 +377,5 @@ Since version 1.\* this extension was completely rewritten internally and can be
 
 
 ## License
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fmikemadisonweb%2Fyii2-rabbitmq.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fmikemadisonweb%2Fyii2-rabbitmq?ref=badge_large)
+
+This extension is distributed under the [MIT License](LICENSE).
