@@ -217,6 +217,70 @@ Give each connection a name and use that name in the `connection` option on prod
 
 Running `yii rabbitmq/declare-all a` creates the `events` exchange, the `orders` queue and its binding in `/a`. Running it for `b` creates `events` and `billing` in `/b`. Queues and exchanges with no `connection` apply to every selected connection. Bindings apply where their endpoints are available. Distinct connections may configure the same queue or exchange name with different options.
 
+#### Single active consumer on a specific vhost
+
+##### Configure SAC in Yii
+
+Enable **Single Active Consumer (SAC)** when declaring a classic or quorum queue. In the Yii configuration loaded by your console application, set `components.rabbitmq.queues[].arguments` for the target queue. The entry `'x-single-active-consumer' => ['t', true]` sends the boolean value `true` to RabbitMQ. SAC is built into the broker and takes effect when the queue is first created. [RabbitMQ single active consumer](https://www.rabbitmq.com/docs/consumers#single-active-consumer)
+
+This example uses connection `a` for both the queue and the consumer, so both point to vhost `/a`. Use your broker credentials and a callback class that implements `ConsumerInterface`. If connection `a` already exists, reuse it and append the queue and consumer entries to your existing lists.
+
+```php
+<?php
+return [
+    'components' => [
+        'rabbitmq' => [
+            'class' => \mikemadisonweb\rabbitmq\Configuration::class,
+            'connections' => [[
+                'name' => 'a', 'host' => 'localhost', 'vhost' => '/a',
+                'user' => 'YOUR_USERNAME', 'password' => 'YOUR_PASSWORD',
+            ]],
+            'queues' => [[
+                'name' => 'jobs.sac',
+                'connection' => 'a',
+                'arguments' => ['x-single-active-consumer' => ['t', true]],
+            ]],
+            'consumers' => [[
+                'name' => 'jobs-worker',
+                'connection' => 'a',
+                'callbacks' => ['jobs.sac' => \app\consumers\JobsConsumer::class],
+                'qos' => ['prefetch_count' => 1],
+            ]],
+        ],
+    ],
+];
+```
+
+Declare the new queue from the Yii application, then check its arguments on the broker.
+
+```sh
+php yii rabbitmq/declare-queue jobs.sac a
+rabbitmqctl list_queues -p /a name arguments
+```
+
+The `jobs.sac` row should contain `x-single-active-consumer` with the boolean value `true`. If an operator creates the queue in RabbitMQ Management, select vhost `/a` and enter the same key under **Arguments**, with type **Boolean** and value **true**. Use the same queue arguments in every application that declares this queue.
+
+##### Start and check the two workers
+
+Run the following command in **two separate terminals**, or configure your process supervisor to run two copies.
+
+```sh
+php yii rabbitmq/consume jobs-worker
+```
+
+Both workers subscribe to `jobs.sac` in `/a`. RabbitMQ chooses the active worker and promotes the standby if the active worker disconnects. The optional `prefetch_count` setting limits how many unacknowledged messages the active worker can hold.
+
+Run `rabbitmqctl list_consumers -p /a queue_name consumer_tag active` on the broker. For `jobs.sac`, expect two subscriptions, one with `active` set to `true` and one with `false`.
+
+##### Migrating an existing queue
+
+RabbitMQ sets single active consumer at queue creation. Adding the argument to an existing ordinary queue named `jobs` and redeclaring it gives `406 PRECONDITION_FAILED`. To migrate within `/a` while preserving queued messages, use a new name such as `jobs.sac`.
+
+1. Keep the existing `jobs` queue and its workers running. Add and declare `jobs.sac` as shown above, using a distinct consumer name if `jobs-worker` is already in use.
+2. Switch all publishers on connection `a` to the new queue. With the default exchange (`''`), change the routing key from `jobs` to `jobs.sac`. With a direct exchange, bind the new queue to a new routing key before switching publishers. This keeps each publication routed to one queue during the change.
+3. Let the old workers finish the backlog. After all publishers and retry routes have switched, run `rabbitmqctl list_queues -p /a name messages_ready messages_unacknowledged`. Once **both** counts on `jobs` stay at zero, stop the old workers. Remove the old consumer, queue and bindings from application configuration before retiring the broker resources so auto-declaration cannot recreate them.
+4. Start the two new workers as shown above. Starting them after the old queue drains also keeps the old backlog ahead of new jobs.
+
 Usage
 -------------
 As the consumer worker will read messages from the queue, execute a callback method and pass a message to it. 
