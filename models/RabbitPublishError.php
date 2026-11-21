@@ -9,6 +9,10 @@ use mikemadisonweb\rabbitmq\helpers\ReplayOptionsCodec;
 use Yii;
 use yii\behaviors\TimestampBehavior;
 use yii\db\ActiveRecord;
+use yii\db\Expression;
+use yii\di\Instance;
+use yii\mutex\FileMutex;
+use yii\mutex\Mutex;
 
 /**
  * This is the model class for table "rabbit_publish_error".
@@ -23,6 +27,16 @@ use yii\db\ActiveRecord;
  */
 class RabbitPublishError extends ActiveRecord
 {
+    public const MUTEX_COMPONENT = 'rabbitmqReplayMutex';
+    public const MUTEX_NAME = 'rabbit_publish_error';
+
+    /**
+     * @var Mutex|string|array|null Mutex instance, component ID or configuration.
+     * Defaults to the rabbitmqReplayMutex application component (FileMutex on one host).
+     * Configure a shared database mutex when replay runs on multiple hosts.
+     */
+    public $mutex;
+
     /** @var string */
     public $msgBody;
     /** @var string */
@@ -53,7 +67,8 @@ class RabbitPublishError extends ActiveRecord
     public function rules()
     {
         return [
-            [['message', 'options'], 'required'],
+            ['message', 'required', 'strict' => true],
+            ['options', 'required'],
             [['message', 'error'], 'string'],
             [['created_at', 'updated_at', 'counter'], 'integer'],
             [['options'], 'safe'],
@@ -62,16 +77,16 @@ class RabbitPublishError extends ActiveRecord
 
     public function saveItem()
     {
-        if (!$this->producerName) {
+        if ($this->producerName === null || $this->producerName === '') {
             throw new InvalidArgumentException('Field producerName is required!');
         }
-        if (!$this->msgBody) {
+        if ($this->msgBody === null) {
             throw new InvalidArgumentException('Field msgBody is required!');
         }
-        if (!$this->exchangeName) {
+        if ($this->exchangeName === null) {
             throw new InvalidArgumentException('Field exchangeName is required!');
         }
-        if (!$this->errorMsg) {
+        if ($this->errorMsg === null || $this->errorMsg === '') {
             throw new InvalidArgumentException('Field errorMsg is required!');
         }
         $this->message = $this->msgBody;
@@ -86,42 +101,53 @@ class RabbitPublishError extends ActiveRecord
         $this->error = $this->errorMsg;
         $this->counter = 1;
         if (!$this->save()) {
-            print_r($this->errors);
-            throw new DomainException();
+            throw new DomainException(implode(' ', $this->getFirstErrors()));
         }
     }
 
     public function rePublish()
     {
-        $cache = Yii::$app->cache;
-        $key = 'rabbit_publish_error';
-        if ($cache->exists($key)) {
+        $mutex = $this->getReplayMutex();
+        if (!$mutex->acquire(self::MUTEX_NAME)) {
             return;
         }
-        $cache->set($key, true);
-
-        foreach (self::find()->each() as $model) {
-            /** @var self $model */
-            try {
-                $options = ReplayOptionsCodec::decode($model->options);
-                if (!isset($options['producerName'], $options['exchangeName'])) {
-                    throw new DomainException('Stored producerName and exchangeName are required.');
+        try {
+            foreach (self::find()->each() as $model) {
+                /** @var self $model */
+                try {
+                    $options = ReplayOptionsCodec::decode($model->options);
+                    if (!isset($options['producerName'], $options['exchangeName'])) {
+                        throw new DomainException('Stored producerName and exchangeName are required.');
+                    }
+                    $producer = Yii::$app->rabbitmq->getProducer($options['producerName']);
+                    $producer->publish(
+                        $model->message,
+                        $options['exchangeName'],
+                        $options['routingKey'] ?? '',
+                        $options['additionalProperties'] ?? [],
+                        $options['headers'] ?? null
+                    );
+                    $model->delete();
+                } catch (Exception $e) {
+                    $model->error = $e->getMessage();
+                    $model->counter = new Expression('COALESCE([[counter]], 0) + 1');
+                    $model->save(false, ['error', 'counter', 'updated_at']);
                 }
-                $producer = Yii::$app->rabbitmq->getProducer($options['producerName']);
-                $producer->publish(
-                    $model->message,
-                    $options['exchangeName'],
-                    $options['routingKey'] ?? '',
-                    $options['additionalProperties'] ?? [],
-                    $options['headers'] ?? null
-                );
-                $model->delete();
-            } catch (Exception $e) {
-                $model->error = $e->getMessage();
-                $model->updateCounters(['counter' => 1]);
-                $model->save();
             }
+        } finally {
+            $mutex->release(self::MUTEX_NAME);
         }
-        $cache->delete($key);
+    }
+
+    protected function getReplayMutex(): Mutex
+    {
+        if ($this->mutex !== null) {
+            return $this->mutex = Instance::ensure($this->mutex, Mutex::class);
+        }
+        if (!Yii::$app->has(self::MUTEX_COMPONENT)) {
+            Yii::$app->set(self::MUTEX_COMPONENT, ['class' => FileMutex::class]);
+        }
+
+        return Instance::ensure(self::MUTEX_COMPONENT, Mutex::class);
     }
 }

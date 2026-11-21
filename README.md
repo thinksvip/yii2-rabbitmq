@@ -329,6 +329,19 @@ If the connection fails while preparing the channel or topology, the producer re
 
 #### Replaying failed messages
 
+`RabbitPublishError::rePublish()` uses the `rabbitmqReplayMutex` application component. If it is not configured, the model registers a `yii\mutex\FileMutex` using `@runtime/mutex`. The operating system releases the lock when the process exits or is killed. Replay processes on the same host must share their runtime path. When multiple hosts share the failed-message table, configure a database mutex shared by all instances, for example:
+
+```php
+'components' => [
+    'rabbitmqReplayMutex' => [
+        'class' => \yii\mutex\PgsqlMutex::class, // Use MysqlMutex for MySQL.
+        'db' => 'db',
+    ],
+],
+```
+
+A model can select another mutex component with `'mutex' => 'customMutex'`. Old `rabbit_publish_error` cache flags are no longer used.
+
 Newly saved headers use versioned AMQP encoding to retain nested tables, arrays, explicit field types and binary data. Legacy JSON records remain readable, while unsupported header values fail during saving. For rolling upgrades, upgrade all replay workers before enabling new writers: old replay workers cannot read the new header format. Publishing semantics are unchanged; replay does not add broker confirms, and applications must still handle uncertain delivery and duplicates.
 
 Options
