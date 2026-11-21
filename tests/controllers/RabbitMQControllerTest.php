@@ -111,6 +111,15 @@ class RabbitMQControllerTest extends TestCase
         $this->assertSame(Controller::EXIT_CODE_NORMAL, $response);
     }
 
+    public function testDeclareServerNamedQueueWithoutProbingAnUnknownName()
+    {
+        $routing = $this->createMock(Routing::class);
+        $routing->expects($this->never())->method('isQueueExists');
+        $routing->expects($this->once())->method('declareQueue')->with('');
+        \Yii::$container->setSingleton(Configuration::ROUTING_SERVICE_NAME, $routing);
+        $this->assertSame(Controller::EXIT_CODE_NORMAL, $this->controller->runAction('declare-queue', ['']));
+    }
+
     public function testDeclareExchangeAction()
     {
         $routing = $this->createMock(Routing::class);

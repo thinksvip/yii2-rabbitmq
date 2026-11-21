@@ -220,14 +220,15 @@ class RabbitMQController extends Controller
         string $connectionName = Configuration::DEFAULT_CONNECTION_NAME
     ): int {
         $routing = $this->getRouting($connectionName);
-        if ($routing->isQueueExists($queueName))
+        if ($queueName !== '' && $routing->isQueueExists($queueName))
         {
             $this->stderr(Console::ansiFormat("Queue `{$queueName}` is already exists.\n", [Console::FG_RED]));
 
             return ExitCode::UNSPECIFIED_ERROR;
         }
         $routing->declareQueue($queueName);
-        $this->stdout(Console::ansiFormat("Queue `{$queueName}` was declared.\n", [Console::FG_GREEN]));
+        $message = $queueName === '' ? "Server-named queue was declared.\n" : "Queue `{$queueName}` was declared.\n";
+        $this->stdout(Console::ansiFormat($message, [Console::FG_GREEN]));
 
         return ExitCode::OK;
     }

@@ -244,7 +244,7 @@ class Consumer extends BaseRabbitMQ
     {
         foreach ($this->queues as $name => $options)
         {
-            $this->getChannel()->basic_cancel($this->getConsumerTag($name), false, true);
+            $this->getChannel()->basic_cancel($this->getConsumerTag((string)$name), false, true);
         }
     }
 
@@ -296,8 +296,9 @@ class Consumer extends BaseRabbitMQ
         foreach ($this->queues as $queue => $callback)
         {
             $that = $this;
+            $queue = (string)$queue;
             $this->getChannel()->basic_consume(
-                $queue,
+                $queue === '' ? $this->routing->getQueueName($queue) : $queue,
                 $this->getConsumerTag($queue),
                 null,
                 null,

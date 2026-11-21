@@ -190,6 +190,8 @@ As PHP daemon especially based upon a framework may be prone to memory leaks, it
 #### Auto-declare
 By default extension configured in auto-declare mode, which means that on every message published exchanges, queues and bindings will be checked and created if missing. If performance means much to your application you should disable that feature in configuration and use console commands to declare and delete routing schema by yourself.
 
+Set `declare` to `false` on a queue or exchange managed outside the application. Automatic setup and `rabbitmq/declare-all` skip creating that resource. Configured bindings still use it. The explicit `declare-queue` and `declare-exchange` commands can create it.
+
 Usage
 -------------
 As the consumer worker will read messages from the queue, execute a callback method and pass a message to it. 
@@ -339,8 +341,8 @@ parameter | required | type | default | comments
 name | yes | string |  | The exchange name consists of a non-empty sequence of these characters: letters, digits, hyphen, underscore, period, or colon.
 type | yes | string |  | Type of the exchange, possible values are `direct`, `fanout`, `topic` and `headers`.
 passive | no | boolean | false | If set to true, the server will reply with Declare-Ok if the exchange already exists with the same name, and raise an error if not. The client can use this to check whether an exchange exists without modifying the server state. When set, all other method fields except name and no-wait are ignored. A declare with both passive and no-wait has no effect.
-durable | no | boolean | false | Durable exchanges remain active when a server restarts. Non-durable exchanges (transient exchanges) are purged if/when a server restarts.
-auto_delete | no | boolean | true | If set to true, the exchange would be deleted when no queues are bound to it anymore.
+durable | no | boolean | true | Durable exchanges remain active when a server restarts. Non-durable exchanges (transient exchanges) are purged if/when a server restarts.
+auto_delete | no | boolean | false | If set to true, the exchange would be deleted when no queues are bound to it anymore.
 internal | no | boolean | false | Internal exchange may not be used directly by publishers, but only when bound to other exchanges.
 nowait | no | boolean | false | Client may send next request immediately after sending the first one, no waiting for the reply is required
 arguments | no | array | null | A set of arguments for the declaration.
@@ -354,12 +356,14 @@ parameter | required | type | default | comments
 --- | --- | --- | --- | ---
 name | no | string | '' | The queue name can be empty, or a sequence of these characters: letters, digits, hyphen, underscore, period, or colon. 
 passive | no | boolean | false | If set to true, the server will reply with Declare-Ok if the queue already exists with the same name, and raise an error if not.
-durable | no | boolean | false | Durable queues remain active when a server restarts. Non-durable queues (transient queues) are purged if/when a server restarts.
-auto_delete | no | boolean | true | If set to true, the queue is deleted when all consumers have finished using it. 
+durable | no | boolean | true | Durable queues remain active when a server restarts. Non-durable queues (transient queues) are purged if/when a server restarts.
+auto_delete | no | boolean | false | If set to true, the queue is deleted when all consumers have finished using it.
 exclusive | no | boolean | false | Exclusive queues may only be accessed by the current connection, and are deleted when that connection closes. Passive declaration of an exclusive queue by other connections are not allowed.
 nowait | no | boolean | false | Client may send next request immediately after sending the first one, no waiting for the reply is required
 arguments | false | array | null | A set of arguments for the declaration. 
 ticket | no | integer | null | Access ticket
+
+A queue with an empty name uses the name returned by RabbitMQ on declaration. Keep `nowait` set to `false` to receive this name for bindings and consumers in the same connection session. Each consumer process using an exclusive server-named queue gets its own queue.
 
 A complete explanation about options, their defaults, and valuable details can be found in [AMQP 0-9-1 Reference Guide](http://www.rabbitmq.com/amqp-0-9-1-reference.html). 
 

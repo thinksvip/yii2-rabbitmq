@@ -6,27 +6,23 @@ use mikemadisonweb\rabbitmq\exceptions\RuntimeException;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Exception\AMQPProtocolChannelException;
-use yii\helpers\ArrayHelper;
 
 class Routing
 {
+    use ChannelCache;
+
     protected $queues = [];
     protected $exchanges = [];
     protected $bindings = [];
 
     private $exchangesDeclared = [];
     private $queuesDeclared = [];
+    private $generatedQueueName;
+    private $ownedExclusiveQueues = [];
+
+    // RabbitMQ may finish deleting a named exclusive queue just after its owning connection closes.
+    private const EXCLUSIVE_RELEASE_DELAYS_US = [20000, 50000, 100000, 200000];
     private $isDeclared = false;
-
-    /**
-     * @var $conn AbstractConnection
-     */
-    private $conn;
-
-    /**
-     * @var $conn AMQPChannel
-     */
-    private $ch;
 
     /**
      * @param AbstractConnection $conn
@@ -49,7 +45,7 @@ class Routing
      */
     public function setExchanges(array $exchanges)
     {
-        $this->exchanges = $this->arrangeByName($exchanges);
+        $this->exchanges = array_column($exchanges, null, 'name');
     }
 
     /**
@@ -67,12 +63,24 @@ class Routing
      */
     public function declareAll() : bool
     {
+        if ($this->ch !== null && !$this->hasCurrentChannel()) {
+            $this->reset();
+        }
         if (!$this->isDeclared) {
-            foreach (array_keys($this->exchanges) as $name) {
-                $this->declareExchange($name);
+            // Deleting an old exclusive queue can remove its auto-delete exchange. Reacquire queues first.
+            foreach ($this->queues as $name => $queue) {
+                if ($name === '') {
+                    $this->declareQueueEntries('', array_filter($queue, static function ($entry) {
+                        return $entry['declare'] ?? true;
+                    }));
+                } elseif ($queue['declare'] ?? true) {
+                    $this->declareQueue((string)$name);
+                }
             }
-            foreach (array_keys($this->queues) as $name) {
-                $this->declareQueue($name);
+            foreach ($this->exchanges as $name => $exchange) {
+                if ($name !== '' && ($exchange['declare'] ?? true)) {
+                    $this->declareExchange((string)$name);
+                }
             }
             $this->declareBindings();
             $this->isDeclared = true;
@@ -94,34 +102,61 @@ class Routing
         }
 
         $queue = $this->queues[$queueName];
-        if (!isset($this->queuesDeclared[$queueName])) {
-            if (ArrayHelper::isAssociative($queue)) {
-                $this->getChannel()->queue_declare(
-                    $queue['name'],
-                    $queue['passive'],
-                    $queue['durable'],
-                    $queue['exclusive'],
-                    $queue['auto_delete'],
-                    $queue['nowait'],
-                    $queue['arguments'],
-                    $queue['ticket']
-                );
-            } else {
-                foreach ($queue as $q) {
-                    $this->getChannel()->queue_declare(
-                        $q['name'],
-                        $q['passive'],
-                        $q['durable'],
-                        $q['exclusive'],
-                        $q['auto_delete'],
-                        $q['nowait'],
-                        $q['arguments'],
-                        $q['ticket']
-                    );
-                }
+        $this->declareQueueEntries($queueName, $queueName === '' ? $queue : [$queue]);
+    }
+
+    private function declareQueueEntries(string $queueName, array $entries): void
+    {
+        foreach ($entries as $index => $queue) {
+            $channel = $this->getChannel();
+            if (isset($this->queuesDeclared[$queueName][$index])) {
+                continue;
             }
-            $this->queuesDeclared[$queueName] = true;
+            $result = $this->declareQueueOnBroker($channel, $queue);
+            if ($queueName === '' && $result !== null) {
+                $this->generatedQueueName = $result[0];
+            }
+            $this->queuesDeclared[$queueName][$index] = true;
         }
+    }
+
+    private function declareQueueOnBroker(AMQPChannel $channel, array $queue)
+    {
+        $name = $queue['name'];
+        $wasOwner = isset($this->ownedExclusiveQueues[$name]);
+        unset($this->ownedExclusiveQueues[$name]);
+        for ($attempt = 0; ; $attempt++) {
+            try {
+                $result = $channel->queue_declare(
+                    $name, $queue['passive'], $queue['durable'], $queue['exclusive'],
+                    $queue['auto_delete'], $queue['nowait'], $queue['arguments'], $queue['ticket']
+                );
+                if ($name !== '' && $queue['exclusive'] && !$queue['passive'] && !$queue['nowait']) {
+                    $this->ownedExclusiveQueues[$name] = true;
+                }
+                return $result;
+            } catch (AMQPProtocolChannelException $e) {
+                $this->replaceClosedChannel();
+                if (!$wasOwner || !$queue['exclusive'] || $queue['passive'] || $e->getCode() !== 405
+                    || !isset(self::EXCLUSIVE_RELEASE_DELAYS_US[$attempt])) {
+                    throw $e;
+                }
+                usleep(self::EXCLUSIVE_RELEASE_DELAYS_US[$attempt]);
+                $channel = $this->getChannel();
+            }
+        }
+    }
+
+    /** The broker's empty-name shorthand only works on the channel which declared the queue. */
+    public function getQueueName(string $name): string
+    {
+        if ($name !== '') {
+            return $name;
+        }
+        if ($this->generatedQueueName === null || !$this->hasCurrentChannel()) {
+            throw new RuntimeException('Declare the server-named queue with nowait=false on this connection first.');
+        }
+        return $this->generatedQueueName;
     }
 
     /**
@@ -148,13 +183,13 @@ class Routing
             foreach ($binding['routing_keys'] as $routingKey) {
                 // queue binding is not permitted on the default exchange
                 if ('' !== $binding['exchange']) {
-                    $this->getChannel()->queue_bind($binding['queue'], $binding['exchange'], $routingKey);
+                    $this->getChannel()->queue_bind($this->getQueueName($binding['queue']), $binding['exchange'], $routingKey);
                 }
             }
         } else {
             // queue binding is not permitted on the default exchange
             if ('' !== $binding['exchange']) {
-                $this->getChannel()->queue_bind($binding['queue'], $binding['exchange']);
+                $this->getChannel()->queue_bind($this->getQueueName($binding['queue']), $binding['exchange']);
             }
         }
     }
@@ -189,9 +224,10 @@ class Routing
         if(!isset($this->exchanges[$exchangeName])) {
             throw new RuntimeException("Exchange `{$exchangeName}` is not configured.");
         }
+        $channel = $this->getChannel();
         $exchange = $this->exchanges[$exchangeName];
         if (!isset($this->exchangesDeclared[$exchangeName])) {
-            $this->getChannel()->exchange_declare(
+            $channel->exchange_declare(
                 $exchange['name'],
                 $exchange['type'],
                 $exchange['passive'],
@@ -216,7 +252,7 @@ class Routing
         if (!isset($this->queues[$queueName])) {
             throw new RuntimeException("Queue {$queueName} is not configured. Purge is aborted.");
         }
-        $this->getChannel()->queue_purge($queueName, true);
+        $this->getChannel()->queue_purge($this->getQueueName($queueName), true);
     }
 
     /**
@@ -226,10 +262,15 @@ class Routing
     public function deleteAll()
     {
         foreach (array_keys($this->queues) as $name) {
-            $this->deleteQueue($name);
+            // A different session cannot identify an anonymous queue from configuration alone.
+            if ($name !== '' || ($this->generatedQueueName !== null && $this->hasCurrentChannel())) {
+                $this->deleteQueue((string)$name);
+            }
         }
         foreach (array_keys($this->exchanges) as $name) {
-            $this->deleteExchange($name);
+            if ($name !== '') {
+                $this->deleteExchange((string)$name);
+            }
         }
     }
 
@@ -243,7 +284,14 @@ class Routing
         if (!isset($this->queues[$queueName])) {
             throw new RuntimeException("Queue {$queueName} is not configured. Delete is aborted.");
         }
-        $this->getChannel()->queue_delete($queueName);
+        $this->getChannel()->queue_delete($this->getQueueName($queueName));
+        if ($queueName === '') {
+            $this->generatedQueueName = null;
+        }
+        unset($this->queuesDeclared[$queueName], $this->ownedExclusiveQueues[$queueName]);
+        // Losing a final binding can also remove an auto-delete exchange.
+        $this->exchangesDeclared = [];
+        $this->isDeclared = false;
     }
 
     /**
@@ -257,6 +305,8 @@ class Routing
             throw new RuntimeException("Exchange {$exchangeName} is not configured. Delete is aborted.");
         }
         $this->getChannel()->exchange_delete($exchangeName);
+        $this->exchangesDeclared = [];
+        $this->isDeclared = false;
     }
 
     /**
@@ -266,9 +316,17 @@ class Routing
      */
     public function isExchangeExists(string $exchangeName) : bool
     {
+        if ($exchangeName === '') {
+            // RabbitMQ creates the default exchange on every vhost and forbids even passive declarations.
+            return true;
+        }
         try {
             $this->getChannel()->exchange_declare($exchangeName, null, true);
         } catch (AMQPProtocolChannelException $e) {
+            $this->replaceClosedChannel();
+            if ($e->getCode() !== 404) {
+                throw $e;
+            }
             return false;
         }
 
@@ -283,12 +341,26 @@ class Routing
     public function isQueueExists(string $queueName) : bool
     {
         try {
-            $this->getChannel()->queue_declare($queueName, true);
+            $this->getChannel()->queue_declare($this->getQueueName($queueName), true);
         } catch (AMQPProtocolChannelException $e) {
+            $this->replaceClosedChannel();
+            if ($e->getCode() !== 404) {
+                throw $e;
+            }
             return false;
         }
 
         return true;
+    }
+
+    private function replaceClosedChannel()
+    {
+        // A protocol channel exception leaves the connection and its other resources intact.
+        if ($this->conn->isConnected()) {
+            $this->ch = $this->conn->channel();
+        } else {
+            $this->reset();
+        }
     }
 
     /**
@@ -309,12 +381,23 @@ class Routing
         return $namedArr;
     }
 
+    /** Discard broker-session state after a disconnect. */
+    public function reset()
+    {
+        $this->ch = null;
+        $this->isDeclared = false;
+        $this->generatedQueueName = null;
+        $this->queuesDeclared = [];
+        $this->exchangesDeclared = [];
+    }
+
     /**
      * @return AMQPChannel
      */
     private function getChannel()
     {
-        if (empty($this->ch) || null === $this->ch->getChannelId()) {
+        if (!$this->hasCurrentChannel()) {
+            $this->reset();
             $this->ch = $this->conn->channel();
         }
 
