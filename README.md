@@ -1,5 +1,8 @@
 RabbitMQ Extension for Yii2
 ==================
+
+English · [简体中文](README.zh-CN.md)
+
 Wrapper based on php-amqplib library to incorporate messaging in your Yii2 application via RabbitMQ. Inspired by RabbitMqBundle for Symfony framework.
 
 `xincheng/yii2-rabbitmq` is an independently maintained fork of [mikemadisonweb/yii2-rabbitmq](https://github.com/mikemadisonweb/yii2-rabbitmq).
