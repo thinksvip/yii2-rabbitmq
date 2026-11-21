@@ -4,6 +4,7 @@ namespace mikemadisonweb\rabbitmq\components;
 
 use mikemadisonweb\rabbitmq\events\RabbitMQPublisherEvent;
 use mikemadisonweb\rabbitmq\exceptions\RuntimeException;
+use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
 
@@ -117,16 +118,7 @@ class Producer extends BaseRabbitMQ
         array $additionalProperties = [],
         ?array $headers = null
     ) {
-        if ($this->autoDeclare)
-        {
-            $this->routing->declareAll();
-        }
-        if ($this->safe && !$this->routing->isExchangeExists($exchangeName))
-        {
-            throw new RuntimeException(
-                "Exchange `{$exchangeName}` does not declared in broker (You see this message because safe mode is ON)."
-            );
-        }
+        $channel = $this->getPublishChannel($exchangeName);
         $serialized = false;
         if (!is_string($msgBody))
         {
@@ -155,7 +147,19 @@ class Producer extends BaseRabbitMQ
             )
         );
 
-        $this->getChannel()->basic_publish($msg, $exchangeName, $routingKey);
+        // A serializer or before_publish handler may have renewed the shared connection.
+        if ($channel !== $this->ch || !$this->hasCurrentChannel()) {
+            $channel = $this->getPublishChannel($exchangeName);
+        }
+        try {
+            $channel->basic_publish($msg, $exchangeName, $routingKey);
+        } catch (\Exception $e) {
+            if ($this->isTransportFailure($e)) {
+                // The broker may have received this message. Prepare the next call for a fresh connection.
+                $this->close();
+            }
+            throw $e;
+        }
 
         \Yii::$app->rabbitmq->trigger(
             RabbitMQPublisherEvent::AFTER_PUBLISH,
@@ -175,5 +179,35 @@ class Producer extends BaseRabbitMQ
                 'routing_key' => $routingKey,
             ]
         );
+    }
+
+    private function getPublishChannel(string $exchangeName): AMQPChannel
+    {
+        try {
+            return $this->preparePublishChannel($exchangeName);
+        } catch (\Exception $e) {
+            if (!$this->isTransportFailure($e)) {
+                throw $e;
+            }
+            $this->renew();
+            return $this->preparePublishChannel($exchangeName);
+        }
+    }
+
+    private function preparePublishChannel(string $exchangeName): AMQPChannel
+    {
+        if ($this->conn->isConnected()) {
+            $this->conn->checkHeartBeat();
+        }
+        if ($this->autoDeclare) {
+            $this->routing->declareAll();
+        }
+        if ($this->safe && !$this->routing->isExchangeExists($exchangeName)) {
+            throw new RuntimeException(
+                "Exchange `{$exchangeName}` does not declared in broker (You see this message because safe mode is ON)."
+            );
+        }
+
+        return $this->getChannel();
     }
 }

@@ -4,12 +4,19 @@ namespace mikemadisonweb\rabbitmq\components;
 
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AbstractConnection;
+use PhpAmqpLib\Exception\AMQPChannelClosedException;
+use PhpAmqpLib\Exception\AMQPConnectionClosedException;
+use PhpAmqpLib\Exception\AMQPDataReadException;
+use PhpAmqpLib\Exception\AMQPIOException;
+use PhpAmqpLib\Exception\AMQPIOWaitException;
+use PhpAmqpLib\Exception\AMQPSocketException;
+use PhpAmqpLib\Exception\AMQPTimeoutException;
 
 abstract class BaseRabbitMQ
 {
-    protected $conn;
+    use ChannelCache;
+
     protected $autoDeclare;
-    protected $ch;
 
     /**
      * @var $logger Logger
@@ -40,19 +47,27 @@ abstract class BaseRabbitMQ
 
     public function __destruct()
     {
-        $this->close();
+        // The DI container owns the connection and shares it with other services.
+        $this->closeChannel();
     }
 
-    public function close()
+    protected function closeChannel()
     {
-        if ($this->ch) {
+        if ($this->hasCurrentChannel()) {
             try {
                 $this->ch->close();
             } catch (\Exception $e) {
                 // ignore on shutdown
             }
         }
-        if ($this->conn && $this->conn->isConnected()) {
+        $this->ch = null;
+    }
+
+    public function close()
+    {
+        $this->closeChannel();
+        $this->routing->reset();
+        if ($this->conn->isConnected()) {
             try {
                 $this->conn->close();
             } catch (\Exception $e) {
@@ -63,9 +78,8 @@ abstract class BaseRabbitMQ
 
     public function renew()
     {
-        if (!$this->conn->isConnected()) {
-            return;
-        }
+        $this->ch = null;
+        $this->routing->reset();
         $this->conn->reconnect();
     }
 
@@ -74,10 +88,21 @@ abstract class BaseRabbitMQ
      */
     public function getChannel()
     {
-        if (empty($this->ch) || null === $this->ch->getChannelId()) {
+        if (!$this->hasCurrentChannel()) {
             $this->ch = $this->conn->channel();
         }
 
         return $this->ch;
+    }
+
+    protected function isTransportFailure(\Throwable $error): bool
+    {
+        return $error instanceof AMQPConnectionClosedException
+            || $error instanceof AMQPChannelClosedException
+            || $error instanceof AMQPIOException
+            || $error instanceof AMQPIOWaitException
+            || $error instanceof AMQPSocketException
+            || $error instanceof AMQPDataReadException
+            || $error instanceof AMQPTimeoutException;
     }
 }

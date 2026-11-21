@@ -33,13 +33,16 @@ class ProducerTest extends TestCase
         ]);
         $connection = $this->getMockBuilder(AMQPLazyConnection::class)
             ->disableOriginalConstructor()
-            ->setMethods(['channel'])
+            ->onlyMethods(['channel', 'isConnected', 'checkHeartBeat'])
             ->getMock();
         $channel = $this->getMockBuilder(AMQPChannel::class)
             ->disableOriginalConstructor()
             ->getMock();
         $channel->expects($this->once())
             ->method('basic_publish');
+        $connection->method('isConnected')->willReturn(true);
+        $connection->channels[1] = $channel;
+        $channel->method('getChannelId')->willReturn(1);
         $connection
             ->method('channel')
             ->willReturn($channel);

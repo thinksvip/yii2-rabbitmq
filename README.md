@@ -261,6 +261,8 @@ Routing key as third parameter is optional, which can be the case for fanout exc
 
 By default connection to broker only get established upon publishing a message, it would not try to connect on each HTTP request if there is no need to.
 
+If the connection fails while preparing the channel or topology, the producer reconnects once before sending. If the write itself fails, `publish()` propagates the exception. Delivery is uncertain at that point, so retrying the message can produce a duplicate.
+
 Options
 -------------
 For TLS, set the connection's `port` to the broker's TLS listener (usually 5671) and set `ssl_context` to an array of PHP TLS options such as `['cafile' => '/path/to/ca.pem']`. The default connection opens lazily. Existing configurations that specify `AMQPSSLConnection::class` open TLS immediately and return an `AMQPStreamConnection` instance.
