@@ -3,6 +3,7 @@
 namespace mikemadisonweb\rabbitmq\tests\controllers;
 
 use mikemadisonweb\rabbitmq\components\Consumer;
+use mikemadisonweb\rabbitmq\components\Producer;
 use mikemadisonweb\rabbitmq\components\Routing;
 use mikemadisonweb\rabbitmq\Configuration;
 use mikemadisonweb\rabbitmq\controllers\RabbitMQController;
@@ -94,6 +95,20 @@ class RabbitMQControllerTest extends TestCase
         $this->assertSame(19, $controller->runAction('restart-consume', ['worker']));
     }
 
+    /**
+     * PHPUnit runs an isolated test from a new PHP process with a finite stdin.
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testPublishesEmptyPipedMessageWithDefaultRoutingKey()
+    {
+        define('mikemadisonweb\\rabbitmq\\controllers\\STDIN', fopen('php://memory', 'r+'));
+        $producer = $this->createMock(Producer::class);
+        $producer->expects($this->once())->method('publish')->with('', 'events', '');
+        \Yii::$container->setSingleton(sprintf(Configuration::PRODUCER_SERVICE_NAME, 'local'), $producer);
+        $this->assertSame(0, $this->controller->runAction('publish', ['local', 'events']));
+    }
+
     /** @requires extension pcntl */
     public function testDisabledSignalFunctionExplainsStartupFailure()
     {
@@ -109,6 +124,64 @@ class RabbitMQControllerTest extends TestCase
         fclose($pipes[2]);
         $this->assertNotSame(0, proc_close($process));
         $this->assertStringContainsString("Function 'pcntl_signal' is referenced", $out . $err);
+    }
+
+    public function testPublishReadsPipedStdinThroughConsoleApplication()
+    {
+        $body = str_repeat("0123456789\n", 850) . "\0end\n";
+        $process = proc_open([PHP_BINARY, __DIR__ . '/console-fixture.php', 'rabbitmq/publish', 'local', 'events', 'jobs'], [
+            ['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w'],
+        ], $pipes);
+        $this->assertIsResource($process);
+        fwrite($pipes[0], $body);
+        fclose($pipes[0]);
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $this->assertSame(0, proc_close($process), $error);
+        $this->assertSame(hash('sha256', $body) . " events jobs\nMessage was successfully published.\n", $output);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testPublishRejectsTerminalInput()
+    {
+        if (!is_readable('/dev/ptmx')) {
+            $this->markTestSkipped('The isolated process needs a selectable Unix pseudo-terminal as stdin.');
+        }
+        $terminal = fopen('/dev/ptmx', 'r+');
+        $this->assertTrue(stream_isatty($terminal));
+        define('mikemadisonweb\\rabbitmq\\controllers\\STDIN', $terminal);
+        $this->assertPublishInputRejected('Please pipe in some data');
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testPublishRejectsIncompleteNonblockingInput()
+    {
+        if (!function_exists('stream_socket_pair') || PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('The isolated process needs a nonblocking input stream.');
+        }
+        [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+        define('mikemadisonweb\\rabbitmq\\controllers\\STDIN', $reader);
+        stream_set_blocking($reader, false);
+        fwrite($writer, 'incomplete');
+        $this->assertPublishInputRejected('Could not read the message');
+        fclose($writer);
+    }
+
+    private function assertPublishInputRejected(string $expected)
+    {
+        $producer = $this->createMock(Producer::class);
+        $producer->expects($this->never())->method('publish');
+        \Yii::$container->setSingleton(sprintf(Configuration::PRODUCER_SERVICE_NAME, 'local'), $producer);
+        $this->controller->expects($this->once())->method('stderr')->with($this->stringContains($expected));
+        $this->assertSame(Controller::EXIT_CODE_ERROR, $this->controller->runAction('publish', ['local', 'events']));
     }
 
     public function testDeclareAllAction()

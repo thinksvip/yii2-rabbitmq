@@ -139,16 +139,16 @@ class RabbitMQController extends Controller
     public function actionPublish(string $producerName, string $exchangeName, string $routingKey = ''): int
     {
         $producer = $this->rabbitmq->getProducer($producerName);
-        $data = '';
-        if (posix_isatty(STDIN))
+        if (stream_isatty(STDIN))
         {
             $this->stderr(Console::ansiFormat("Please pipe in some data in order to send it.\n", [Console::FG_RED]));
 
             return ExitCode::UNSPECIFIED_ERROR;
         }
-        while (!feof(STDIN))
-        {
-            $data .= fread(STDIN, 8192);
+        $data = stream_get_contents(STDIN);
+        if ($data === false || !feof(STDIN)) {
+            $this->stderr("Could not read the message from stdin.\n");
+            return ExitCode::UNSPECIFIED_ERROR;
         }
         $producer->publish($data, $exchangeName, $routingKey);
         $this->stdout("Message was successfully published.\n", Console::FG_GREEN);
