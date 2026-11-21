@@ -6,9 +6,8 @@ define('YII_DEBUG', true);
 $_SERVER['SCRIPT_NAME']     = '/' . __DIR__;
 $_SERVER['SCRIPT_FILENAME'] = __FILE__;
 $composerAutoload           = __DIR__ . '/../vendor/autoload.php';
-if (!is_file($composerAutoload))
-{
-    die("Composer autoloader not found!");
+if (!is_file($composerAutoload)) {
+    throw new RuntimeException("Composer autoloader not found. Run composer install before testing.");
 }
 require_once($composerAutoload);
 require_once(__DIR__ . '/../vendor/yiisoft/yii2/Yii.php');

@@ -11,17 +11,28 @@
     }
   ],
   "require": {
-    "php": "^7.1||^8.0",
-    "yiisoft/yii2": "^2.0.43",
-    "php-amqplib/php-amqplib": "^3.1"
+    "php": "^7.4 || ^8.0",
+    "yiisoft/yii2": "^2.0.55",
+    "php-amqplib/php-amqplib": "^3.7.4"
   },
   "require-dev": {
-    "phpunit/phpunit": "^9.5.10",
-    "php-coveralls/php-coveralls": "^2.5"
+    "phpunit/phpunit": "^9.6.30"
   },
   "autoload": {
     "psr-4": {
       "mikemadisonweb\\rabbitmq\\": ""
+    }
+  },
+  "repositories": [
+    {
+      "type": "composer",
+      "url": "https://asset-packagist.org",
+      "only": ["bower-asset/*"]
+    }
+  ],
+  "config": {
+    "allow-plugins": {
+      "yiisoft/yii2-composer": true
     }
   },
   "extra": {

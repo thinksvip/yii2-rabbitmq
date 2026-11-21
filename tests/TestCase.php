@@ -18,6 +18,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     {
         parent::tearDown();
         $this->destroyApplication();
+        Yii::$container = new \yii\di\Container();
     }
 
     /**
@@ -37,11 +38,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
 
     protected function getVendorPath()
     {
-        $vendor = dirname(__DIR__, 2) . '/vendor';
-        if (!is_dir($vendor)) {
-            $vendor = dirname(__DIR__, 4);
-        }
-        return $vendor;
+        return dirname(__DIR__) . '/vendor';
     }
 
     /**
@@ -60,20 +57,17 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
      * @param $object
      * @param $method
      * @param array $args
-     * @param bool $revoke whether to make method inaccessible after execution
      * @return mixed
      * @since 2.0.11
      */
-    protected function invokeMethod($object, $method, $args = [], $revoke = true)
+    protected function invokeMethod($object, $method, $args = [])
     {
         $reflection = new \ReflectionObject($object);
         $method = $reflection->getMethod($method);
-        $method->setAccessible(true);
-        $result = $method->invokeArgs($object, $args);
-        if ($revoke) {
-            $method->setAccessible(false);
+        if (PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
         }
-        return $result;
+        return $method->invokeArgs($object, $args);
     }
 
     /**
@@ -81,43 +75,38 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
      * @param $object
      * @param $propertyName
      * @param $value
-     * @param bool $revoke whether to make property inaccessible after setting
      * @since 2.0.11
      */
-    protected function setInaccessibleProperty($object, $propertyName, $value, $revoke = true)
+    protected function setInaccessibleProperty($object, $propertyName, $value)
     {
         $class = new \ReflectionClass($object);
         while (!$class->hasProperty($propertyName)) {
             $class = $class->getParentClass();
         }
         $property = $class->getProperty($propertyName);
-        $property->setAccessible(true);
-        $property->setValue($object, $value);
-        if ($revoke) {
-            $property->setAccessible(false);
+        if (PHP_VERSION_ID < 80100) {
+            $property->setAccessible(true);
         }
+        $property->setValue($object, $value);
     }
 
     /**
      * Gets an inaccessible object property.
      * @param $object
      * @param $propertyName
-     * @param bool $revoke whether to make property inaccessible after getting
      * @return mixed
      */
-    protected function getInaccessibleProperty($object, $propertyName, $revoke = true)
+    protected function getInaccessibleProperty($object, $propertyName)
     {
         $class = new \ReflectionClass($object);
         while (!$class->hasProperty($propertyName)) {
             $class = $class->getParentClass();
         }
         $property = $class->getProperty($propertyName);
-        $property->setAccessible(true);
-        $result = $property->getValue($object);
-        if ($revoke) {
-            $property->setAccessible(false);
+        if (PHP_VERSION_ID < 80100) {
+            $property->setAccessible(true);
         }
-        return $result;
+        return $property->getValue($object);
     }
 
     /**

@@ -240,16 +240,9 @@ class DependencyInjectionTest extends TestCase
     public function testValidateCallbackInterface()
     {
         $callbackAlias = 'callback_mock';
-        $callbackName = 'WrongCallbackMock';
         $queueName = 'queue';
         $consumerName = 'consumer';
-        // not implementing interface
-        $this
-            ->getMockBuilder(\AnotherInterface::class)
-            ->setMockClassName($callbackName)
-            ->disableOriginalConstructor()
-            ->getMock();
-        \Yii::$container->setSingleton($callbackAlias, ['class' => $callbackName]);
+        \Yii::$container->setSingleton($callbackAlias, new \stdClass());
         $this->loadExtension([
             'components' => [
                 'rabbitmq' => [

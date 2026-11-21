@@ -35,7 +35,7 @@ class ConsumerTest extends TestCase
         $routing = $this->createMock(Routing::class);
         $routing->expects($this->once())
             ->method('declareAll');
-        $logger = \Yii::$container->get(Configuration::LOGGER_SERVICE_NAME);
+        $logger = $this->createMock(Logger::class);
         $consumer = new Consumer($connection, $routing, $logger, true);
         if (!empty($queues)) {
             $consumer->setQueues($queues);
@@ -69,7 +69,7 @@ class ConsumerTest extends TestCase
         $routing = $this->createMock(Routing::class);
         $routing->expects($this->never())
             ->method('declareAll');
-        $logger = \Yii::$container->get(Configuration::LOGGER_SERVICE_NAME);
+        $logger = $this->createMock(Logger::class);
         $consumer = new Consumer($connection, $routing, $logger, false);
         $consumer->setQos(['prefetch_size' => 0, 'prefetch_count' => 0, 'global' => false]);
         $this->assertSame(Controller::EXIT_CODE_NORMAL, $consumer->consume());

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <phpunit
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:noNamespaceSchemaLocation="http://schema.phpunit.de/6.5/phpunit.xsd"
+        xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.6/phpunit.xsd"
         colors="true"
         beStrictAboutOutputDuringTests="false"
         beStrictAboutTestsThatDoNotTestAnything="true"
@@ -10,23 +10,25 @@
         convertErrorsToExceptions="true"
         convertNoticesToExceptions="true"
         convertWarningsToExceptions="true"
-        convertDeprecationsToExceptions="false"
+        cacheResult="false"
+        convertDeprecationsToExceptions="true"
         stopOnFailure="false">
     <testsuites>
         <testsuite name="Test Suite">
             <directory>./tests</directory>
         </testsuite>
     </testsuites>
-    <filter>
-        <whitelist processUncoveredFilesFromWhitelist="true">
-            <directory suffix=".php">.</directory>
-            <exclude>
-                <directory>./vendor</directory>
-                <directory>./tests</directory>
-            </exclude>
-        </whitelist>
-    </filter>
-    <logging>
-        <log type="coverage-clover" target="build/logs/clover.xml"/>
-    </logging>
+    <coverage disableCodeCoverageIgnore="true" processUncoveredFiles="true">
+        <include>
+            <file>Configuration.php</file>
+            <file>DependencyInjection.php</file>
+            <directory suffix=".php">components</directory>
+            <directory suffix=".php">controllers</directory>
+            <directory suffix=".php">events</directory>
+            <directory suffix=".php">exceptions</directory>
+            <directory suffix=".php">helpers</directory>
+            <directory suffix=".php">migrations</directory>
+            <directory suffix=".php">models</directory>
+        </include>
+    </coverage>
 </phpunit>

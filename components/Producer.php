@@ -106,7 +106,7 @@ class Producer extends BaseRabbitMQ
      * @param string $exchangeName
      * @param string $routingKey
      * @param array  $additionalProperties
-     * @param array  $headers
+     * @param array|null $headers
      *
      * @throws RuntimeException
      */
@@ -115,7 +115,7 @@ class Producer extends BaseRabbitMQ
         string $exchangeName,
         string $routingKey = '',
         array $additionalProperties = [],
-        array $headers = null
+        ?array $headers = null
     ) {
         if ($this->autoDeclare)
         {
