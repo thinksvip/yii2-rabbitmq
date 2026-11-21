@@ -246,7 +246,7 @@ class RabbitMQController extends Controller
     {
         if ($this->interactive)
         {
-            $input = Console::prompt('Are you sure you want to delete all queues and exchanges?', ['default' => 'yes']);
+            $input = $this->prompt('Are you sure you want to delete all queues and exchanges?', ['default' => 'yes']);
             if ($input !== 'yes' && $input !== 'y')
             {
                 $this->stderr(Console::ansiFormat("Aborted.\n", [Console::FG_RED]));
@@ -276,7 +276,7 @@ class RabbitMQController extends Controller
     ): int {
         if ($this->interactive)
         {
-            $input = Console::prompt('Are you sure you want to delete that exchange?', ['default' => 'yes']);
+            $input = $this->prompt('Are you sure you want to delete that exchange?', ['default' => 'yes']);
             if ($input !== 'yes')
             {
                 $this->stderr(Console::ansiFormat("Aborted.\n", [Console::FG_RED]));
@@ -306,7 +306,7 @@ class RabbitMQController extends Controller
     ): int {
         if ($this->interactive)
         {
-            $input = Console::prompt('Are you sure you want to delete that queue?', ['default' => 'yes']);
+            $input = $this->prompt('Are you sure you want to delete that queue?', ['default' => 'yes']);
             if ($input !== 'yes')
             {
                 $this->stderr(Console::ansiFormat("Aborted.\n", [Console::FG_RED]));
@@ -337,7 +337,7 @@ class RabbitMQController extends Controller
     ): int {
         if ($this->interactive)
         {
-            $input = Console::prompt(
+            $input = $this->prompt(
                 'Are you sure you want to delete all messages inside that queue?',
                 ['default' => 'yes']
             );

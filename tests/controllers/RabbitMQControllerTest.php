@@ -33,7 +33,7 @@ class RabbitMQControllerTest extends TestCase
         );
         $this->controller = $this->getMockBuilder(RabbitMQController::class)
             ->setConstructorArgs([Configuration::EXTENSION_CONTROLLER_ALIAS, \Yii::$app])
-            ->onlyMethods(['stderr', 'stdout'])
+            ->onlyMethods(['stderr', 'stdout', 'prompt'])
             ->getMock();
     }
 
@@ -182,6 +182,21 @@ class RabbitMQControllerTest extends TestCase
         \Yii::$container->setSingleton(sprintf(Configuration::PRODUCER_SERVICE_NAME, 'local'), $producer);
         $this->controller->expects($this->once())->method('stderr')->with($this->stringContains($expected));
         $this->assertSame(Controller::EXIT_CODE_ERROR, $this->controller->runAction('publish', ['local', 'events']));
+    }
+
+    /** @dataProvider destructiveActions */
+    public function testDeclinedConfirmationAbortsBeforeRouting($action, $args)
+    {
+        $routing = $this->createMock(Routing::class);
+        $routing->expects($this->never())->method($this->anything());
+        \Yii::$container->setSingleton(Configuration::ROUTING_SERVICE_NAME, $routing);
+        $this->controller->expects($this->once())->method('prompt')->willReturn('no');
+        $this->assertSame(Controller::EXIT_CODE_ERROR, $this->controller->runAction($action, $args));
+    }
+
+    public static function destructiveActions(): array
+    {
+        return [['delete-all', []], ['delete-queue', ['q']], ['delete-exchange', ['x']], ['purge-queue', ['q']]];
     }
 
     public function testDeclareAllAction()
