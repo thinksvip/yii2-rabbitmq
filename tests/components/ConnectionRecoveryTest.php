@@ -109,6 +109,61 @@ class ConnectionRecoveryTest extends TestCase
         $producer->publish('two', 'events');
     }
 
+    public static function settlementFailures(): array
+    {
+        return [
+            'broken connection' => [new AMQPConnectionClosedException('Connection closed before ack')],
+            'ack timed out' => [new AMQPTimeoutException('Write timed out')],
+        ];
+    }
+
+    /** @dataProvider settlementFailures */
+    public function testConsumerRestoresSubscriptionsAndQosAfterFailedAck($error)
+    {
+        $old = $this->createMock(AMQPChannel::class);
+        $new = $this->createMock(AMQPChannel::class);
+        $connection = $this->createMock(AbstractConnection::class);
+        $connection->method('isConnected')->willReturn(true);
+        $connection->channels[1] = $old;
+        $connection->method('channel')->willReturnCallback(function () use ($connection) {
+            return $connection->channels[1];
+        });
+        $connection->expects($this->once())->method('reconnect')->willReturnCallback(function () use ($connection, $new) {
+            $connection->channels[1] = $new;
+        });
+        foreach ([$old, $new] as $channel) {
+            $channel->method('getChannelId')->willReturn(1);
+            $channel->expects($this->once())->method('basic_qos')->with(0, 1, false);
+            $channel->expects($this->once())->method('basic_consume')->willReturnCallback(
+                function ($queue, $tag, $noLocal, $noAck, $exclusive, $nowait, $callback) use ($channel) {
+                    $channel->callbacks[$tag] = $callback;
+                }
+            );
+            $channel->method('wait')->willReturnCallback(function () use ($channel) {
+                $message = new AMQPMessage('job');
+                $message->setChannel($channel)->setDeliveryInfo(1, false, '', 'jobs');
+                reset($channel->callbacks)($message);
+            });
+        }
+        $acks = 0;
+        $old->expects($this->exactly(2))->method('basic_ack')->willReturnCallback(function () use (&$acks, $error) {
+            if (++$acks === 2) {
+                throw $error;
+            }
+        });
+        $new->expects($this->once())->method('basic_ack');
+        $new->expects($this->once())->method('basic_cancel');
+        $routing = $this->createMock(Routing::class);
+        $routing->expects($this->exactly(2))->method('declareAll');
+        $consumer = new Consumer($connection, $routing, $this->createMock(Logger::class), true);
+        $consumer->setQos(['prefetch_size' => 0, 'prefetch_count' => 1, 'global' => false]);
+        $consumer->setQueues(['jobs' => function () { return true; }]);
+        $consumer->setProceedOnException(true);
+        $consumer->setIdleTimeoutExitCode(22);
+        $this->assertSame(0, $consumer->consume(2));
+        $this->assertSame(2, $consumer->getConsumed());
+    }
+
     public function testPassiveProbeMissDoesNotRecreateServerNamedQueue()
     {
         $connection = $this->createMock(AbstractConnection::class);
@@ -139,5 +194,51 @@ class ConnectionRecoveryTest extends TestCase
         $this->assertTrue($routing->declareAll());
         $this->assertFalse($routing->isQueueExists('missing'));
         $this->assertFalse($routing->declareAll());
+    }
+
+    public function testConsumerAttemptsOneReconnectAfterSetupTimeout()
+    {
+        $connection = $this->createMock(AbstractConnection::class);
+        $connection->expects($this->once())->method('reconnect');
+        $routing = $this->createMock(Routing::class);
+        $routing->expects($this->exactly(2))->method('declareAll')->willThrowException(new AMQPTimeoutException());
+        $consumer = new Consumer($connection, $routing, $this->createMock(Logger::class), true);
+        $consumer->setIdleTimeoutExitCode(22);
+        $this->expectException(AMQPTimeoutException::class);
+        $consumer->consume();
+    }
+
+    public function testApplicationTransportExceptionIsNotRetried()
+    {
+        $connection = $this->createMock(AbstractConnection::class);
+        $connection->expects($this->never())->method('reconnect');
+        $channel = $this->createMock(AMQPChannel::class);
+        $connection->method('channel')->willReturn($channel);
+        $channel->method('basic_consume')->willReturnCallback(
+            function ($queue, $tag, $noLocal, $noAck, $exclusive, $nowait, $callback) use ($channel) {
+                $channel->callbacks[$tag] = $callback;
+            }
+        );
+        $channel->expects($this->once())->method('wait')->willReturnCallback(function () use ($channel) {
+            reset($channel->callbacks)(new AMQPMessage('job'));
+        });
+        $consumer = new Consumer($connection, new Routing($connection), $this->createMock(Logger::class), false);
+        $consumer->setQueues(['jobs' => function () { throw new AMQPConnectionClosedException('Publisher lost'); }]);
+        $this->expectException(AMQPConnectionClosedException::class);
+        $consumer->consume();
+    }
+
+    public function testIdleTimeoutKeepsConfiguredExitCode()
+    {
+        $connection = $this->createMock(AbstractConnection::class);
+        $connection->expects($this->never())->method('reconnect');
+        $channel = $this->createMock(AMQPChannel::class);
+        $channel->callbacks = ['jobs' => function () {}];
+        $channel->expects($this->once())->method('wait')->willThrowException(new AMQPTimeoutException());
+        $connection->method('channel')->willReturn($channel);
+        $consumer = new Consumer($connection, new Routing($connection), $this->createMock(Logger::class), false);
+        $consumer->setIdleTimeout(1);
+        $consumer->setIdleTimeoutExitCode(22);
+        $this->assertSame(22, $consumer->consume());
     }
 }

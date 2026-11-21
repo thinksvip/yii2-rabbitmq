@@ -249,7 +249,14 @@ You can publish any data type(object, int, array etc), despite the fact that Rab
 As for the return codes there is a bunch of them in order for you to control following processing of the message by the broker:
 - **ConsumerInterface::MSG_ACK** - Acknowledge message (mark as processed) and drop it from the queue
 - **ConsumerInterface::MSG_REJECT** - Reject and drop message from the queue
-- **ConsumerInterface::MSG_REJECT_REQUEUE** - Reject and requeue message in RabbitMQ
+- **ConsumerInterface::MSG_REQUEUE** - Reject and requeue message in RabbitMQ
+
+With `proceed_on_exception` enabled, a callback or deserialization error requeues the delivery and frees its prefetch slot. A message that always fails can be redelivered repeatedly. Return `MSG_REJECT` for a permanent failure to use the queue's dead-letter policy. Return one of the result codes to let the consumer settle the delivery.
+
+If the consumer loses its broker connection, it attempts to reconnect once and restores its subscriptions and QoS. RabbitMQ can redeliver a message when its acknowledgement was interrupted, so callbacks should tolerate processing the same message again.
+
+When `consume()` exits, it releases the consumer's delivery channel. RabbitMQ can then redeliver any prefetched messages left unprocessed, including on the next `consume()` call. Other channels on the shared connection stay available.
+
 #### Publish
  Here is an example how you can publish a message:
 ```php

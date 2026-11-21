@@ -6,6 +6,7 @@ use BadFunctionCallException;
 use ErrorException;
 use mikemadisonweb\rabbitmq\events\RabbitMQConsumerEvent;
 use mikemadisonweb\rabbitmq\exceptions\RuntimeException;
+use PhpAmqpLib\Exception\AMQPChannelClosedException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use Throwable;
@@ -41,6 +42,11 @@ class Consumer extends BaseRabbitMQ
     private $consumed = 0;
 
     private $forceStop = false;
+
+    // wait() invokes application code synchronously. Only broker I/O failures may restart the session.
+    private const HANDLING = 'handling';
+    private const SETTLING = 'settling';
+    private $deliveryPhase;
 
     /**
      * Set the memory limit
@@ -207,34 +213,71 @@ class Consumer extends BaseRabbitMQ
     public function consume($msgAmount = 0): int
     {
         $this->target = $msgAmount;
-        $this->setup();
-        // At the end of the callback execution
-        while (count($this->getChannel()->callbacks))
-        {
-            if ($this->maybeStopConsumer())
-            {
-                break;
-            }
-            try
-            {
-                $this->getChannel()->wait(null, false, $this->getIdleTimeout());
-            }
-            catch (AMQPTimeoutException $e)
-            {
-                if (null !== $this->getIdleTimeoutExitCode())
-                {
-                    return $this->getIdleTimeoutExitCode();
+        $this->resetConsumed();
+        $this->deliveryPhase = null;
+
+        try {
+            return $this->runConsumer();
+        } finally {
+            // Cancelling subscriptions leaves prefetched deliveries unacked until their channel closes.
+            $this->closeChannel();
+        }
+    }
+
+    private function runConsumer(): int
+    {
+        $recovering = false;
+        while (true) {
+            $waiting = false;
+            try {
+                $this->setup();
+                $this->getChannel();
+                while ($this->ch->callbacks) {
+                    if ($this->maybeStopConsumer()) {
+                        return Controller::EXIT_CODE_NORMAL;
+                    }
+                    $waiting = true;
+                    $this->ch->wait(null, false, $this->getIdleTimeout());
+                    $waiting = false;
+                    $recovering = false;
+                    // A publisher called by a handler may have renewed the shared connection.
+                    if (!$this->forceStop && !$this->hasCurrentChannel()) {
+                        throw new AMQPChannelClosedException('Consumer channel closed during delivery.');
+                    }
+                    if (extension_loaded('pcntl') && (!defined('AMQP_WITHOUT_SIGNALS') || !AMQP_WITHOUT_SIGNALS)) {
+                        pcntl_signal_dispatch();
+                    }
+                    if ($this->forceStop) {
+                        return Controller::EXIT_CODE_NORMAL;
+                    }
+                }
+                return Controller::EXIT_CODE_NORMAL;
+            } catch (Throwable $e) {
+                $phase = $this->deliveryPhase;
+                $this->deliveryPhase = null;
+                if ($phase === self::HANDLING || !$this->isTransportFailure($e)) {
+                    throw $e;
+                }
+                if ($this->forceStop) {
+                    return Controller::EXIT_CODE_NORMAL;
+                }
+                if ($e instanceof AMQPTimeoutException && $waiting && $phase === null) {
+                    if ($this->hasCurrentChannel()) {
+                        $this->stopConsuming();
+                    }
+                    if ($this->getIdleTimeoutExitCode() !== null) {
+                        return $this->getIdleTimeoutExitCode();
+                    }
+                    throw $e;
+                }
+                if ($recovering) {
+                    throw $e;
                 }
 
-                throw $e;
-            }
-            if (!AMQP_WITHOUT_SIGNALS && extension_loaded('pcntl'))
-            {
-                pcntl_signal_dispatch();
+                $recovering = true;
+                $this->renew();
             }
         }
-
-        return Controller::EXIT_CODE_NORMAL;
     }
 
     /**
@@ -359,6 +402,15 @@ class Consumer extends BaseRabbitMQ
      */
     protected function onReceive(AMQPMessage $msg, string $queueName, callable $callback): bool
     {
+        $this->deliveryPhase = self::HANDLING;
+        $this->processDelivery($msg, $queueName, $callback);
+        $this->consumed++;
+        $this->deliveryPhase = null;
+        return true;
+    }
+
+    private function processDelivery(AMQPMessage $msg, string $queueName, callable $callback): void
+    {
         $timeStart = microtime(true);
         \Yii::$app->rabbitmq->trigger(
             RabbitMQConsumerEvent::BEFORE_CONSUME,
@@ -370,6 +422,7 @@ class Consumer extends BaseRabbitMQ
             )
         );
 
+        $processingFailed = false;
         try
         {
             // deserialize message back to initial data type
@@ -380,7 +433,23 @@ class Consumer extends BaseRabbitMQ
             }
             // process message and return the result code back to broker
             $processFlag = $callback($msg);
+        } catch (Throwable $e) {
+            $this->logger->logError($e, $msg);
+            if (!$this->proceedOnException) {
+                throw $e;
+            }
+            // Release the prefetch slot while preserving the failed message for redelivery.
+            $processFlag = ConsumerInterface::MSG_REQUEUE;
+            $processingFailed = true;
+        }
+
+        try {
+            $this->deliveryPhase = self::SETTLING;
             $this->sendResult($msg, $processFlag);
+            $this->deliveryPhase = self::HANDLING;
+            if ($processingFailed) {
+                return;
+            }
             \Yii::$app->rabbitmq->trigger(
                 RabbitMQConsumerEvent::AFTER_CONSUME,
                 new RabbitMQConsumerEvent(
@@ -406,14 +475,11 @@ class Consumer extends BaseRabbitMQ
         catch (Throwable $e)
         {
             $this->logger->logError($e, $msg);
-            if (!$this->proceedOnException)
+            if (!$this->proceedOnException || ($this->deliveryPhase === self::SETTLING && $this->isTransportFailure($e)))
             {
                 throw $e;
             }
         }
-        $this->consumed++;
-
-        return true;
     }
 
     /**
@@ -425,26 +491,31 @@ class Consumer extends BaseRabbitMQ
     protected function sendResult(AMQPMessage $msg, $processFlag)
     {
         // true in testing environment
-        if (!isset($msg->delivery_info['channel']))
+        if ($msg->getChannel() === null)
         {
             return;
+        }
+
+        // A delivery tag is valid only on the channel of the original delivery.
+        if ($msg->getChannel() !== $this->ch || !$this->hasCurrentChannel()) {
+            throw new AMQPChannelClosedException('Delivery channel closed before acknowledgement.');
         }
 
         // respond to the broker with appropriate reply code
         if ($processFlag === ConsumerInterface::MSG_REQUEUE || false === $processFlag)
         {
             // Reject and requeue message to RabbitMQ
-            $msg->delivery_info['channel']->basic_reject($msg->delivery_info['delivery_tag'], true);
+            $msg->reject(true);
         }
         elseif ($processFlag === ConsumerInterface::MSG_REJECT)
         {
             // Reject and drop
-            $msg->delivery_info['channel']->basic_reject($msg->delivery_info['delivery_tag'], false);
+            $msg->reject(false);
         }
         else
         {
             // Remove message from queue only if callback return not false
-            $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag']);
+            $msg->ack();
         }
     }
 
@@ -478,7 +549,6 @@ class Consumer extends BaseRabbitMQ
 
     protected function setup()
     {
-        $this->resetConsumed();
         if ($this->autoDeclare)
         {
             $this->routing->declareAll();
