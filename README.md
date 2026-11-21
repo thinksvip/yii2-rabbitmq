@@ -327,6 +327,10 @@ By default connection to broker only get established upon publishing a message, 
 
 If the connection fails while preparing the channel or topology, the producer reconnects once before sending. If the write itself fails, `publish()` propagates the exception. Delivery is uncertain at that point, so retrying the message can produce a duplicate.
 
+#### Replaying failed messages
+
+Newly saved headers use versioned AMQP encoding to retain nested tables, arrays, explicit field types and binary data. Legacy JSON records remain readable, while unsupported header values fail during saving. For rolling upgrades, upgrade all replay workers before enabling new writers: old replay workers cannot read the new header format. Publishing semantics are unchanged; replay does not add broker confirms, and applications must still handle uncertain delivery and duplicates.
+
 Options
 -------------
 For TLS, set the connection's `port` to the broker's TLS listener (usually 5671) and set `ssl_context` to an array of PHP TLS options such as `['cafile' => '/path/to/ca.pem']`. The default connection opens lazily. Existing configurations that specify `AMQPSSLConnection::class` open TLS immediately and return an `AMQPStreamConnection` instance.

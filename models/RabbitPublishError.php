@@ -5,7 +5,7 @@ namespace mikemadisonweb\rabbitmq\models;
 use DomainException;
 use Exception;
 use InvalidArgumentException;
-use mikemadisonweb\rabbitmq\components\Producer;
+use mikemadisonweb\rabbitmq\helpers\ReplayOptionsCodec;
 use Yii;
 use yii\behaviors\TimestampBehavior;
 use yii\db\ActiveRecord;
@@ -82,7 +82,7 @@ class RabbitPublishError extends ActiveRecord
             'additionalProperties' => $this->additionalProperties,
             'headers' => $this->headers
         ];
-        $this->options = json_encode($options);
+        $this->options = ReplayOptionsCodec::encode($options);
         $this->error = $this->errorMsg;
         $this->counter = 1;
         if (!$this->save()) {
@@ -103,15 +103,17 @@ class RabbitPublishError extends ActiveRecord
         foreach (self::find()->each() as $model) {
             /** @var self $model */
             try {
-                $options = json_decode($model->options, true);
-                /** @var Producer $producer */
+                $options = ReplayOptionsCodec::decode($model->options);
+                if (!isset($options['producerName'], $options['exchangeName'])) {
+                    throw new DomainException('Stored producerName and exchangeName are required.');
+                }
                 $producer = Yii::$app->rabbitmq->getProducer($options['producerName']);
                 $producer->publish(
                     $model->message,
                     $options['exchangeName'],
-                    $options['routingKey'],
-                    $options['additionalProperties'],
-                    $options['headers']
+                    $options['routingKey'] ?? '',
+                    $options['additionalProperties'] ?? [],
+                    $options['headers'] ?? null
                 );
                 $model->delete();
             } catch (Exception $e) {
