@@ -565,6 +565,19 @@ Since version 1.\* this extension was completely rewritten internally and can be
 - Consumer handles control signals in a predictable manner
 
 
+## Running the verification suite
+
+Run `composer install` on PHP 7.4 or 8.5. The full suite uses the CLI extensions `pcntl`, `sockets` and `pdo_sqlite`. Xdebug with coverage enabled supplies the line report.
+
+Use two disposable vhosts on a test broker, with credentials that can declare and delete test resources. Set `RABBITMQ_TEST_URL_A` and `RABBITMQ_TEST_URL_B` to their AMQP URLs. Set `RABBITMQ_TEST_TLS_URL` to the first vhost on the TLS port, using the same AMQP URL format, and `RABBITMQ_TEST_TLS_CA` to the PEM file for the test CA. The CI workflow prepares both vhosts and the TLS listener on a disposable RabbitMQ container.
+
+```sh
+XDEBUG_MODE=coverage vendor/bin/phpunit --fail-on-skipped --fail-on-risky --fail-on-warning --coverage-clover build/clover.xml
+sh tests/installation/run.sh
+```
+
+The installation test creates a separate Composer application with production dependencies, boots Yii console and web applications, and verifies a real delivery and acknowledgement in each.
+
 ## License
 
 This extension is distributed under the [MIT License](LICENSE).

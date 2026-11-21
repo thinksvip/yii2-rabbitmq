@@ -1,0 +1,52 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  phpunit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['7.4', '8.5']
+    services:
+      rabbitmq:
+        image: rabbitmq:4-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: rabbit_test
+          RABBITMQ_DEFAULT_PASS: rabbit_test
+        ports:
+          - 5671:5671
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, sockets, pcntl, pdo_sqlite
+          coverage: xdebug
+      - run: composer install --no-interaction --prefer-dist
+      - name: Configure test vhosts and TLS
+        env:
+          BROKER: ${{ job.services.rabbitmq.id }}
+        run: bash tests/ci/prepare-broker.sh "$BROKER" "$RUNNER_TEMP/rabbitmq-tls"
+      - name: Boot a downstream Yii application without dev dependencies
+        run: sh tests/installation/run.sh
+        env:
+          RABBITMQ_TEST_URL_A: amqp://rabbit_test:rabbit_test@127.0.0.1:5672/a
+      - run: vendor/bin/phpunit --fail-on-skipped --fail-on-risky --fail-on-warning --coverage-cobertura build/logs/cobertura.xml
+        env:
+          RABBITMQ_TEST_URL_A: amqp://rabbit_test:rabbit_test@127.0.0.1:5672/a
+          RABBITMQ_TEST_URL_B: amqp://rabbit_test:rabbit_test@127.0.0.1:5672/b
+          RABBITMQ_TEST_TLS_URL: amqp://rabbit_test:rabbit_test@127.0.0.1:5671/a
+          RABBITMQ_TEST_TLS_CA: ${{ runner.temp }}/rabbitmq-tls/ca.pem
+      - uses: coverallsapp/github-action@v2
+        if: matrix.php == '8.5'
+        with:
+          file: build/logs/cobertura.xml
+          format: cobertura

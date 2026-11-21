@@ -1,0 +1,18 @@
+{
+  "name": "tests/yii2-rabbitmq-application",
+  "require": {
+    "xincheng/yii2-rabbitmq": "dev-local-smoke"
+  },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "./extension",
+      "options": {
+        "symlink": true,
+        "versions": {"xincheng/yii2-rabbitmq": "dev-local-smoke"}
+      }
+    },
+    {"type": "composer", "url": "https://asset-packagist.org", "only": ["bower-asset/*"]}
+  ],
+  "config": {"allow-plugins": {"yiisoft/yii2-composer": true}}
+}
