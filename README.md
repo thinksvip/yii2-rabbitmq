@@ -262,6 +262,41 @@ When `consume()` exits, it releases the consumer's delivery channel. RabbitMQ ca
 
 When repeatedly creating temporary routers for an external connection, call `$routing->close()` after use. It releases only that router's channel, keeping the shared connection and other channels available. Destruction also attempts cleanup, and a closed router can be reused. `reset()` only discards session state after a disconnect; use `close()` to release a live channel.
 
+#### Long-running consumers
+
+A long-running callback needs a healthy broker connection and enough time to acknowledge its delivery. For example, a worker processing one report at a time can request a 15-second heartbeat and limit prefetch to one message.
+
+```php
+'connections' => [[
+    'name' => 'batch', 'host' => 'localhost', 'vhost' => '/a',
+    'heartbeat' => 15, 'read_write_timeout' => 35, // seconds
+]],
+'queues' => [['name' => 'reports', 'connection' => 'batch']],
+'consumers' => [[
+    'name' => 'report-worker', 'connection' => 'batch',
+    'callbacks' => ['reports' => \app\components\ReportConsumer::class],
+    'qos' => ['prefetch_count' => 1],
+]],
+```
+
+The extension defaults to `heartbeat = 0`, which disables its callback heartbeat sender. After changing the Yii connection settings, restart the existing worker through its process supervisor so the new connection negotiates the heartbeat. With a positive heartbeat, CLI PHP with `pcntl` and an available `SIGALRM` sends heartbeats from `before_consume` through `after_consume`. The worker restores its previous signal settings after each delivery.
+
+When using `--withoutSignals=1`, running without `pcntl` or reserving `SIGALRM` for the application, split the callback into bounded steps and call `Yii::$app->rabbitmq->getConnection('batch')->checkHeartBeat()` between steps, roughly every half heartbeat. A native call that blocks PHP longer than the heartbeat timeout can run in a subprocess while the consumer polls for completion and sends heartbeats. [RabbitMQ heartbeats](https://www.rabbitmq.com/docs/heartbeats)
+
+The broker's delivery acknowledgement deadline runs from delivery until the callback returns and the extension acknowledges it. Heartbeat frames keep the connection active while that clock continues to run. The consumer's `idle_timeout` controls how long it waits for a delivery. For jobs that can take up to one hour, for example, allow two hours on each broker node in `rabbitmq.conf`.
+
+```ini
+consumer_timeout = 7200000
+```
+
+From RabbitMQ 3.12, a queue policy can set a deadline in milliseconds for a specific queue and vhost. For an existing classic queue on RabbitMQ 4.2, the following command sets two hours for `reports` in `/a`. If the queue already uses a policy, add the key to its effective policy. [RabbitMQ 4.2 acknowledgement timeouts](https://www.rabbitmq.com/docs/4.2/consumers#acknowledgement-timeout)
+
+```sh
+rabbitmqctl set_policy -p /a --apply-to classic_queues reports-timeout '^reports$' '{"consumer-timeout":7200000}'
+```
+
+RabbitMQ 4.2 defaults to 30 minutes and closes the channel with `PRECONDITION_FAILED` when the deadline expires. From RabbitMQ 4.3, only quorum queues enforce delivery acknowledgement timeouts. For a quorum queue on these versions use `--apply-to quorum_queues`. Expired deliveries can be redelivered and the broker can cancel the AMQP 0-9-1 consumer or close its channel. [RabbitMQ acknowledgement timeouts](https://www.rabbitmq.com/docs/consumers#acknowledgement-timeout)
+
 #### Publish
  Here is an example how you can publish a message:
 ```php

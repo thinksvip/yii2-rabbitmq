@@ -451,13 +451,25 @@ class Consumer extends BaseRabbitMQ
     protected function onReceive(AMQPMessage $msg, string $queueName, callable $callback): bool
     {
         $this->deliveryPhase = self::HANDLING;
-        $this->processDelivery($msg, $queueName, $callback);
+        $heartbeat = ConsumerHeartbeat::start($this->conn);
+        try {
+            $this->processDelivery($msg, $queueName, $callback, $heartbeat);
+        } finally {
+            if ($heartbeat !== null) {
+                $heartbeat->stop();
+            }
+        }
         $this->consumed++;
+        if ($heartbeat !== null) {
+            // A long after_consume listener may have lost the connection after the ACK.
+            $this->deliveryPhase = self::SETTLING;
+            $heartbeat->throwIfFailed();
+        }
         $this->deliveryPhase = null;
         return true;
     }
 
-    private function processDelivery(AMQPMessage $msg, string $queueName, callable $callback): void
+    private function processDelivery(AMQPMessage $msg, string $queueName, callable $callback, ?ConsumerHeartbeat $heartbeat): void
     {
         $timeStart = microtime(true);
         \Yii::$app->rabbitmq->trigger(
@@ -493,6 +505,9 @@ class Consumer extends BaseRabbitMQ
 
         try {
             $this->deliveryPhase = self::SETTLING;
+            if ($heartbeat !== null) {
+                $heartbeat->throwIfFailed();
+            }
             $this->sendResult($msg, $processFlag);
             $this->deliveryPhase = self::HANDLING;
             if ($processingFailed) {
