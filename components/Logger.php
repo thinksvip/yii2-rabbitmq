@@ -5,9 +5,6 @@ namespace mikemadisonweb\rabbitmq\components;
 use PhpAmqpLib\Message\AMQPMessage;
 use yii\helpers\Console;
 
-/**
- * @codeCoverageIgnore
- */
 class Logger
 {
     public $options;
@@ -47,9 +44,9 @@ class Logger
     }
 
     /**
-     * @param \Exception $e
+     * @param \Throwable $e
      */
-    public function printError(\Exception $e)
+    public function printError(\Throwable $e)
     {
         if (!$this->options['print_console']) {
             return;
@@ -73,9 +70,9 @@ class Logger
         $extra['execution_time'] = isset($options['timeStart']) ? $this->getExecutionTime($options['timeStart']) : null;
         $extra['return_code'] = $options['processFlag'] ?? null;
         $extra['memory'] = isset($options['memory']) ? $this->getMemory() : null;
-        $extra['routing_key'] = $options['routingKey'] ?? null;
+        $extra['routing_key'] = $options['routing_key'] ?? $options['routingKey'] ?? $msg->getRoutingKey();
         $extra['queue'] = $options['queue'] ?? null;
-        $extra['exchange'] = $options['exchange'] ?? null;
+        $extra['exchange'] = $options['exchange'] ?? $msg->getExchange();
         \Yii::info([
             'info' => $title,
             'amqp' => [
@@ -113,6 +110,9 @@ class Logger
      */
     public function printInfo($message, $color = Console::FG_YELLOW)
     {
+        if (!($this->options['print_console'] ?? true)) {
+            return false;
+        }
         if (Console::streamSupportsAnsiColors(\STDOUT)) {
             $message = Console::ansiFormat($message, [$color]);
         }
@@ -136,7 +136,7 @@ class Logger
      */
     protected function getMemory() : string
     {
-        if ($this->options['system_memory']) {
+        if ($this->options['system_memory'] && is_readable('/proc/meminfo')) {
             return $this->getSystemFreeMemory();
         }
 
@@ -156,7 +156,8 @@ class Logger
         }
         $unit = ['b','kb','mb','gb','tb','pb'];
 
-        return @round($memory/ (1024 ** ($i = floor(log($memory, 1024)))),2).' '.$unit[$i];
+        $index = (int)floor(log($memory, 1024));
+        return round($memory / (1024 ** $index), 2) . ' ' . $unit[$index];
     }
 
     /**

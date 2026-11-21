@@ -52,11 +52,14 @@ class ProducerTest extends TestCase
         $routing->expects($this->exactly(2))
             ->method('isExchangeExists')
             ->willReturnOnConsecutiveCalls(true, false);
-        $logger = $this->createMock(Logger::class);
+        $logger = new Logger();
+        $logger->options = array_merge(Configuration::DEFAULTS['logger'], ['log' => true]);
         $producer = new Producer($connection, $routing, $logger, true);
         $producer->setSafe(true);
         // Good attempt
-        $producer->publish('Test message', 'exist');
+        $producer->publish('Test message', 'exist', 'order.updated');
+        $messages = \Yii::getLogger()->messages;
+        $this->assertSame('order.updated', end($messages)[0]['amqp']['extra']['routing_key']);
         // Non-existing exchange
         $this->expectException(RuntimeException::class);
         $producer->publish('Test message', 'not-exist');
