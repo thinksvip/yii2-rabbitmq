@@ -167,6 +167,7 @@ Console commands
 -------------
 Extension provides several console commands:
 - **rabbitmq/consume** - Run a consumer
+- **rabbitmq/restart-consume** - Start the named consumer on a fresh connection in the current process. To reload a running systemd-managed worker, send SIGHUP to its main process.
 - **rabbitmq/declare-all** - Create RabbitMQ exchanges, queues and bindings based on configuration
 - **rabbitmq/declare-exchange** - Create the exchange listed in configuration
 - **rabbitmq/declare-queue** - Create the queue listed in configuration
@@ -256,6 +257,8 @@ With `proceed_on_exception` enabled, a callback or deserialization error requeue
 If the consumer loses its broker connection, it attempts to reconnect once and restores its subscriptions and QoS. RabbitMQ can redeliver a message when its acknowledgement was interrupted, so callbacks should tolerate processing the same message again.
 
 When `consume()` exits, it releases the consumer's delivery channel. RabbitMQ can then redeliver any prefetched messages left unprocessed, including on the next `consume()` call. Other channels on the shared connection stay available.
+
+`SIGTERM`, `SIGINT` and `SIGHUP` record a stop or restart request. The main loop applies it after the active wait or delivery finishes, preserving the original `idle_timeout` semantics. With a positive idle timeout, an idle signal request may take effect only when that wait ends. Allow enough shutdown time for waiting and task execution.
 
 When repeatedly creating temporary routers for an external connection, call `$routing->close()` after use. It releases only that router's channel, keeping the shared connection and other channels available. Destruction also attempts cleanup, and a closed router can be reused. `reset()` only discards session state after a disconnect; use `close()` to release a live channel.
 

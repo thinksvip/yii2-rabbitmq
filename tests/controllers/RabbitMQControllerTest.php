@@ -3,7 +3,6 @@
 namespace mikemadisonweb\rabbitmq\tests\controllers;
 
 use mikemadisonweb\rabbitmq\components\Consumer;
-use mikemadisonweb\rabbitmq\components\Producer;
 use mikemadisonweb\rabbitmq\components\Routing;
 use mikemadisonweb\rabbitmq\Configuration;
 use mikemadisonweb\rabbitmq\controllers\RabbitMQController;
@@ -33,54 +32,83 @@ class RabbitMQControllerTest extends TestCase
         );
         $this->controller = $this->getMockBuilder(RabbitMQController::class)
             ->setConstructorArgs([Configuration::EXTENSION_CONTROLLER_ALIAS, \Yii::$app])
-            ->setMethods(['stderr', 'stdout'])
+            ->onlyMethods(['stderr', 'stdout'])
             ->getMock();
     }
 
-    public function testConsumeAction()
+    /** @dataProvider unknownServices */
+    public function testUnknownService($action, $arguments)
     {
-        // Check console flags existence
-        $this->assertTrue(isset($this->controller->optionAliases()['l']));
-        $this->assertTrue(isset($this->controller->optionAliases()['m']));
-        $this->assertSame('messagesLimit', $this->controller->optionAliases()['m']);
-        $this->assertSame('memoryLimit', $this->controller->optionAliases()['l']);
-        $this->assertTrue(in_array('messagesLimit', $this->controller->options('consume'), true));
-        $this->assertTrue(in_array('memoryLimit', $this->controller->options('consume'), true));
-
-        // Invalid consumer name
         $this->expectException(InvalidConfigException::class);
-        $response = $this->controller->runAction('consume', ['unknown']);
-        $this->assertSame(Controller::EXIT_CODE_ERROR, $response);
-
-        // Valid consumer name
-        $name     = 'valid';
-        $consumer = $this->getMockBuilder(Consumer::class)
-            ->disableOriginalConstructor()
-            ->setMethods(['getConsumerTag', 'consume'])
-            ->getMock();
-        \Yii::$container->set(sprintf(Configuration::CONSUMER_SERVICE_NAME, $name), $consumer);
-        $this->controller->debug       = 'false';
-        $this->controller->memoryLimit = '1024';
-        $response                      = $this->controller->runAction('consume', [$name]);
-        $this->assertSame(Controller::EXIT_CODE_NORMAL, $response);
+        $this->controller->runAction($action, $arguments);
     }
 
-    public function testPublishAction()
+    public static function unknownServices(): array
     {
-        // Invalid producer name
-        $this->expectException(InvalidConfigException::class);
-        $response = $this->controller->runAction('publish', ['unknown', 'unknown']);
-        $this->assertSame(Controller::EXIT_CODE_ERROR, $response);
+        return [['consume', ['unknown']], ['publish', ['unknown', 'exchange']]];
+    }
 
-        // No data
-        $name     = 'valid';
-        $producer = $this->getMockBuilder(Producer::class)
-            ->disableOriginalConstructor()
-            ->setMethods(['publish'])
-            ->getMock();
-        \Yii::$container->set(sprintf(Configuration::PRODUCER_SERVICE_NAME, $name), $producer);
-        $response = $this->controller->runAction('publish', [$name, 'does not matter']);
-        $this->assertSame(Controller::EXIT_CODE_ERROR, $response);
+    /**
+     * The options set process-wide AMQP constants in beforeAction.
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testConsumeAliasesAndExitCode()
+    {
+        $consumer = $this->createMock(Consumer::class);
+        $consumer->expects($this->once())->method('setMemoryLimit')->with(128);
+        $consumer->expects($this->once())->method('consume')->with(4)->willReturn(17);
+        \Yii::$container->setSingleton(sprintf(Configuration::CONSUMER_SERVICE_NAME, 'worker'), $consumer);
+        $result = $this->controller->runAction('consume', [
+            'worker', '_aliases' => ['l' => '128', 'm' => '4', 'w' => '1', 'd' => 'false'],
+        ]);
+        $this->assertTrue(AMQP_WITHOUT_SIGNALS);
+        $this->assertFalse(AMQP_DEBUG);
+        $this->assertSame(17, $result);
+    }
+
+    /** @dataProvider invalidLimits */
+    public function testInvalidLimit($limits)
+    {
+        $consumer = $this->createMock(Consumer::class);
+        $consumer->expects($this->never())->method('consume');
+        \Yii::$container->setSingleton(sprintf(Configuration::CONSUMER_SERVICE_NAME, 'worker'), $consumer);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->controller->runAction('consume', array_merge(['worker'], $limits));
+    }
+
+    public static function invalidLimits(): array
+    {
+        return [[['messagesLimit' => 'abc']], [['memoryLimit' => '-1']], [['_aliases' => ['m' => '1.5']]]];
+    }
+
+    public function testRestartUsesFreshConnectionAndSubscribesOnce()
+    {
+        $consumer = $this->createMock(Consumer::class);
+        $consumer->expects($this->once())->method('renew');
+        $consumer->expects($this->once())->method('consume')->with(0)->willReturn(19);
+        $config = $this->createMock(Configuration::class);
+        $config->expects($this->once())->method('getConsumer')->with('worker')->willReturn($consumer);
+        \Yii::$app->set('rabbitmq', $config);
+        $controller = new RabbitMQController('rabbitmq', \Yii::$app);
+        $this->assertSame(19, $controller->runAction('restart-consume', ['worker']));
+    }
+
+    /** @requires extension pcntl */
+    public function testDisabledSignalFunctionExplainsStartupFailure()
+    {
+        $process = proc_open([
+            PHP_BINARY, '-d', 'disable_functions=pcntl_signal', __DIR__ . '/console-fixture.php',
+            'rabbitmq/consume', 'local',
+        ], [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
+        $this->assertIsResource($process);
+        fclose($pipes[0]);
+        $out = stream_get_contents($pipes[1]);
+        $err = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $this->assertNotSame(0, proc_close($process));
+        $this->assertStringContainsString("Function 'pcntl_signal' is referenced", $out . $err);
     }
 
     public function testDeclareAllAction()

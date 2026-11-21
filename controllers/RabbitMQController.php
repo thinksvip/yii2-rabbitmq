@@ -21,13 +21,13 @@ use yii\helpers\Console;
  */
 class RabbitMQController extends Controller
 {
-    public $memoryLimit = 0;
+    public $memoryLimit;
 
-    public $messagesLimit = 0;
+    public $messagesLimit;
 
-    public $debug = false;
+    public $debug;
 
-    public $withoutSignals = false;
+    public $withoutSignals;
 
     /**
      * @var Configuration
@@ -73,15 +73,11 @@ class RabbitMQController extends Controller
     {
         if (defined('AMQP_WITHOUT_SIGNALS') === false)
         {
-            define('AMQP_WITHOUT_SIGNALS', $this->withoutSignals);
+            define('AMQP_WITHOUT_SIGNALS', filter_var($this->withoutSignals, FILTER_VALIDATE_BOOLEAN));
         }
         if (defined('AMQP_DEBUG') === false)
         {
-            if ($this->debug === 'false')
-            {
-                $this->debug = false;
-            }
-            define('AMQP_DEBUG', (bool)$this->debug);
+            define('AMQP_DEBUG', filter_var($this->debug, FILTER_VALIDATE_BOOLEAN));
         }
 
         return parent::beforeAction($event);
@@ -97,15 +93,7 @@ class RabbitMQController extends Controller
      */
     public function actionConsume(string $name): int
     {
-        $consumer = $this->rabbitmq->getConsumer($name);
-        $this->validateConsumerOptions($consumer);
-        if ((null !== $this->memoryLimit) && ctype_digit((string)$this->memoryLimit) && ($this->memoryLimit > 0))
-        {
-            $consumer->setMemoryLimit($this->memoryLimit);
-        }
-        $consumer->consume($this->messagesLimit);
-
-        return ExitCode::OK;
+        return $this->runConsumer($name, false);
     }
 
     /**
@@ -119,9 +107,22 @@ class RabbitMQController extends Controller
      */
     public function actionRestartConsume(string $name): int
     {
+        return $this->runConsumer($name, true);
+    }
+
+    private function runConsumer(string $name, bool $restart): int
+    {
+        $memoryLimit = $this->getLimit($this->memoryLimit, '-l');
+        $messagesLimit = $this->getLimit($this->messagesLimit, '-m');
         $consumer = $this->rabbitmq->getConsumer($name);
-        $consumer->restartDaemon();
-        return $this->actionConsume($name);
+        if ($restart) {
+            $consumer->renew();
+        }
+        $this->registerConsumerSignals($consumer);
+        if ($memoryLimit > 0) {
+            $consumer->setMemoryLimit($memoryLimit);
+        }
+        return $consumer->consume($messagesLimit);
     }
 
     /**
@@ -369,11 +370,11 @@ class RabbitMQController extends Controller
     }
 
     /**
-     * Validate options passed by user
+     * Register signal handlers for this worker
      *
      * @param Consumer $consumer
      */
-    private function validateConsumerOptions(Consumer $consumer)
+    private function registerConsumerSignals(Consumer $consumer)
     {
         if (!AMQP_WITHOUT_SIGNALS && extension_loaded('pcntl'))
         {
@@ -384,20 +385,18 @@ class RabbitMQController extends Controller
                 );
             }
 
-            pcntl_signal(SIGTERM, [$consumer, 'stopDaemon']);
-            pcntl_signal(SIGINT, [$consumer, 'stopDaemon']);
-            pcntl_signal(SIGHUP, [$consumer, 'restartDaemon']);
+            pcntl_signal(SIGTERM, [$consumer, 'handleSignal']);
+            pcntl_signal(SIGINT, [$consumer, 'handleSignal']);
+            pcntl_signal(SIGHUP, [$consumer, 'handleSignal']);
         }
+    }
 
-        $this->messagesLimit = (int)$this->messagesLimit;
-        $this->memoryLimit   = (int)$this->memoryLimit;
-        if (!is_numeric($this->messagesLimit) || 0 > $this->messagesLimit)
-        {
-            throw new InvalidArgumentException('The -m option should be null or greater than 0');
+    private function getLimit($value, string $option): int
+    {
+        $value = $value ?? 0;
+        if ((!is_int($value) && !is_string($value)) || !ctype_digit((string)$value)) {
+            throw new InvalidArgumentException("The {$option} option must be a non-negative integer.");
         }
-        if (!is_numeric($this->memoryLimit) || 0 > $this->memoryLimit)
-        {
-            throw new InvalidArgumentException('The -l option should be null or greater than 0');
-        }
+        return (int)$value;
     }
 }

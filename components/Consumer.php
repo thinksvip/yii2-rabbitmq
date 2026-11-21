@@ -43,6 +43,8 @@ class Consumer extends BaseRabbitMQ
 
     private $forceStop = false;
 
+    private $pendingSignal;
+
     // wait() invokes application code synchronously. Only broker I/O failures may restart the session.
     private const HANDLING = 'handling';
     private const SETTLING = 'settling';
@@ -236,17 +238,35 @@ class Consumer extends BaseRabbitMQ
                     if ($this->maybeStopConsumer()) {
                         return Controller::EXIT_CODE_NORMAL;
                     }
+                    $this->applyPendingSignal();
+                    if ($this->forceStop) {
+                        return Controller::EXIT_CODE_NORMAL;
+                    }
+
                     $waiting = true;
-                    $this->ch->wait(null, false, $this->getIdleTimeout());
+                    try {
+                        $this->ch->wait(null, false, $this->getIdleTimeout());
+                    } catch (AMQPTimeoutException $e) {
+                        // A positive idle timeout can delay signal dispatch until wait() expires.
+                        // Apply the requested lifecycle change only after that wait has unwound.
+                        if ($this->deliveryPhase === null && $this->pendingSignal !== null && $this->hasCurrentChannel()) {
+                            $waiting = false;
+                            $this->applyPendingSignal();
+                            if ($this->forceStop) {
+                                return Controller::EXIT_CODE_NORMAL;
+                            }
+                            $recovering = false;
+                            continue;
+                        }
+                        throw $e;
+                    }
                     $waiting = false;
                     $recovering = false;
                     // A publisher called by a handler may have renewed the shared connection.
                     if (!$this->forceStop && !$this->hasCurrentChannel()) {
                         throw new AMQPChannelClosedException('Consumer channel closed during delivery.');
                     }
-                    if (extension_loaded('pcntl') && (!defined('AMQP_WITHOUT_SIGNALS') || !AMQP_WITHOUT_SIGNALS)) {
-                        pcntl_signal_dispatch();
-                    }
+                    $this->applyPendingSignal();
                     if ($this->forceStop) {
                         return Controller::EXIT_CODE_NORMAL;
                     }
@@ -255,13 +275,19 @@ class Consumer extends BaseRabbitMQ
             } catch (Throwable $e) {
                 $phase = $this->deliveryPhase;
                 $this->deliveryPhase = null;
+                $restartRequested = $this->pendingSignal !== null && $this->pendingSignal === SIGHUP;
+                $stopRequested = $this->pendingSignal !== null && $this->pendingSignal !== SIGHUP;
+                $this->pendingSignal = null;
                 if ($phase === self::HANDLING || !$this->isTransportFailure($e)) {
                     throw $e;
+                }
+                if ($stopRequested) {
+                    $this->forceStop = true;
                 }
                 if ($this->forceStop) {
                     return Controller::EXIT_CODE_NORMAL;
                 }
-                if ($e instanceof AMQPTimeoutException && $waiting && $phase === null) {
+                if ($e instanceof AMQPTimeoutException && $waiting && $phase === null && !$restartRequested) {
                     if ($this->hasCurrentChannel()) {
                         $this->stopConsuming();
                     }
@@ -277,6 +303,28 @@ class Consumer extends BaseRabbitMQ
                 $recovering = true;
                 $this->renew();
             }
+        }
+    }
+
+    /** Only record intent: both an active delivery and an active wait must finish first. */
+    public function handleSignal(int $signal): void
+    {
+        if ($this->pendingSignal === null || $this->pendingSignal === SIGHUP) {
+            $this->pendingSignal = $signal;
+        }
+    }
+
+    private function applyPendingSignal(): void
+    {
+        $signal = $this->pendingSignal;
+        $this->pendingSignal = null;
+        if ($signal === null || $this->forceStop) {
+            return;
+        }
+        if ($signal === SIGHUP) {
+            $this->restartDaemon();
+        } else {
+            $this->stopDaemon();
         }
     }
 
