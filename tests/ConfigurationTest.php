@@ -72,6 +72,23 @@ class ConfigurationTest extends TestCase
         ];
     }
 
+    /** @dataProvider invalidSystemdOptions */
+    public function testRejectsInvalidSystemdTimingOptions($systemd)
+    {
+        $this->expectException(InvalidConfigException::class);
+        $this->expectExceptionMessage('systemd');
+        (new Configuration([
+            'connections' => [['host' => 'localhost']], 'queues' => [['name' => 'jobs']],
+            'consumers' => [['name' => 'worker', 'callbacks' => ['jobs' => 'handler'], 'systemd' => $systemd]],
+        ]))->getConfig();
+    }
+
+    public static function invalidSystemdOptions(): array
+    {
+        return [[false], [null], [['timeout_stop_sec' => 0]], [['timeout_stop_sec' => 'infinity']],
+            [['restart_sec' => -1]], [['restart_sec' => 0]], [['restart_sec' => 1.5]]];
+    }
+
     public function testSingleConnectionShorthandAndNonconsecutiveIndex()
     {
         foreach ([['host' => 'localhost'], [4 => ['host' => 'localhost']]] as $connections) {

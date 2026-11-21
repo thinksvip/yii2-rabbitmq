@@ -113,7 +113,9 @@ class Configuration extends Component
                 'deserializer' => 'unserialize',
                 'systemd' => [
                     'memory_limit' => 0,
-                    'workers' => 1
+                    'workers' => 1,
+                    'timeout_stop_sec' => 300,
+                    'restart_sec' => 5,
                 ],
             ],
         ],
@@ -402,6 +404,18 @@ class Configuration extends Component
             }
             if (isset($consumer['proceed_on_exception']) && !is_bool($consumer['proceed_on_exception'])) {
                 throw new InvalidConfigException('Consumer option `proceed_on_exception` should be of type boolean.');
+            }
+            if (array_key_exists('systemd', $consumer)) {
+                if (!is_array($consumer['systemd'])) {
+                    throw new InvalidConfigException('Consumer option `systemd` should be of type array.');
+                }
+                $this->validateArrayFields($consumer['systemd'], self::DEFAULTS['consumers'][0]['systemd']);
+                foreach (['timeout_stop_sec', 'restart_sec'] as $key) {
+                    if (array_key_exists($key, $consumer['systemd'])
+                        && (!is_int($consumer['systemd'][$key]) || $consumer['systemd'][$key] <= 0)) {
+                        throw new InvalidConfigException("Consumer systemd option `{$key}` must be a positive integer number of seconds.");
+                    }
+                }
             }
             $connectionName = $consumer['connection'] ?? self::DEFAULT_CONNECTION_NAME;
             foreach ($consumer['callbacks'] as $queue => $callback) {

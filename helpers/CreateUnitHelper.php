@@ -22,8 +22,6 @@ class CreateUnitHelper extends BaseObject
 Description=%description%
 After=syslog.target
 After=network.target
-After=postgresql.service
-Requires=postgresql.service
 
 [Service]
 Type=simple
@@ -33,9 +31,11 @@ User=%user%
 Group=%group%
 
 ExecStart=php %yii_path% rabbitmq/consume %name_consumer% %memory_limit%
-ExecReload=php %yii_path% rabbitmq/restart-consume %name_consumer% %memory_limit%
-TimeoutSec=3
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStartSec=30
+TimeoutStopSec=%timeout_stop_sec%
 Restart=always
+RestartSec=%restart_sec%
 
 [Install]
 WantedBy=multi-user.target';
@@ -91,7 +91,9 @@ fi';
                     '%group%',
                     '%yii_path%',
                     '%name_consumer%',
-                    '%memory_limit%'
+                    '%memory_limit%',
+                    '%timeout_stop_sec%',
+                    '%restart_sec%'
                 ],
                 [
                     $description,
@@ -100,7 +102,9 @@ fi';
                     $this->group,
                     $this->work_dir . '/yii',
                     $consumer['name'],
-                    $memory_limit
+                    $memory_limit,
+                    $consumer['systemd']['timeout_stop_sec'],
+                    $consumer['systemd']['restart_sec']
                 ],
                 $this->example
             );

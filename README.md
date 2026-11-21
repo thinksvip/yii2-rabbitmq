@@ -297,6 +297,23 @@ rabbitmqctl set_policy -p /a --apply-to classic_queues reports-timeout '^reports
 
 RabbitMQ 4.2 defaults to 30 minutes and closes the channel with `PRECONDITION_FAILED` when the deadline expires. From RabbitMQ 4.3, only quorum queues enforce delivery acknowledgement timeouts. For a quorum queue on these versions use `--apply-to quorum_queues`. Expired deliveries can be redelivered and the broker can cancel the AMQP 0-9-1 consumer or close its channel. [RabbitMQ acknowledgement timeouts](https://www.rabbitmq.com/docs/consumers#acknowledgement-timeout)
 
+#### Worker deployment settings
+
+A starting point for production connections is `heartbeat=15`, `read_write_timeout=35`, and `channel_rpc_timeout=5.0`, adjusted for the deployment. The RPC timeout bounds operations such as declarations and bindings; the read/write timeout is not a replacement. Enabling `keepalive=true` also requires PHP's sockets extension. Set a finite prefetch based on message size and processing time, and use `--memoryLimit` and `--messagesLimit` to rotate workers.
+
+Generated systemd units have separate startup, shutdown and restart settings. Each consumer can configure:
+
+```php
+'systemd' => [
+    'workers' => 2,
+    'memory_limit' => 256,
+    'timeout_stop_sec' => 300,
+    'restart_sec' => 5,
+],
+```
+
+`timeout_stop_sec` defaults to 300 seconds and must exceed the maximum task duration plus acknowledgement grace. `restart_sec` defaults to 5 seconds; both accept positive integers. The startup timeout is 30 seconds. Regenerate and install the units, then run `systemctl daemon-reload` after changing these settings; existing service files are not updated automatically.
+
 #### Publish
  Here is an example how you can publish a message:
 ```php
@@ -399,6 +416,12 @@ $rabbitmq_defaults = [
                 'idle_timeout_exit_code' => null,
                 'proceed_on_exception' => false,
                 'deserializer' => 'unserialize',
+                'systemd' => [
+                    'memory_limit' => 0,
+                    'workers' => 1,
+                    'timeout_stop_sec' => 300,
+                    'restart_sec' => 5,
+                ],
             ],
         ],
         'logger' => [
